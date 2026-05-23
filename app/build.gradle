@@ -1,0 +1,84 @@
+plugins {
+    id "com.android.application"
+    id "org.jetbrains.kotlin.android"
+}
+
+android {
+    namespace "com.example.androidautodisplay"
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "ro.stf_ftw.libauto"
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName "0.1"
+        setProperty("archivesBaseName", "LibAuto")
+
+        ndk {
+            abiFilters "armeabi-v7a", "arm64-v8a"
+        }
+
+        externalNativeBuild {
+            cmake {
+                arguments "-DCMAKE_TOOLCHAIN_FILE=${file("../native/vcpkg-toolchain.cmake").absolutePath}",
+                        "-DVCPKG_BINARY_SOURCES=clear;files,${file("../third_party/vcpkg-bincache").absolutePath},readwrite",
+                        "-DVCPKG_FEATURE_FLAGS=manifests"
+            }
+        }
+    }
+
+    signingConfigs {
+        debug {
+            enableV1Signing true
+            enableV2Signing true
+            enableV3Signing false
+            enableV4Signing false
+        }
+    }
+
+    flavorDimensions "distribution"
+    productFlavors {
+        compatibility {
+            dimension "distribution"
+            targetSdk 28
+            versionNameSuffix "-compat"
+        }
+        play {
+            dimension "distribution"
+            targetSdk 35
+        }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path file("../native/CMakeLists.txt")
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+}
+
+dependencies {
+    implementation "androidx.core:core-ktx:1.12.0"
+    implementation "androidx.appcompat:appcompat:1.6.1"
+    implementation "com.google.android.material:material:1.11.0"
+    implementation "androidx.lifecycle:lifecycle-service:2.7.0"
+}

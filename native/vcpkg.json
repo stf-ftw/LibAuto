@@ -1,0 +1,17 @@
+{
+  "name": "aasdk-android",
+  "version-string": "0.1",
+  "builtin-baseline": "64e1fbee7d9f40eab5d112aaff648c4dcffe9e47",
+  "dependencies": [
+    "abseil",
+    "protobuf",
+    "boost-system",
+    "boost-asio",
+    "boost-circular-buffer",
+    "boost-log",
+    "boost-thread",
+    "boost-filesystem",
+    "openssl",
+    "libusb"
+  ]
+}

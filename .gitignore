@@ -1,0 +1,32 @@
+# Gradle and Android build outputs
+.gradle/
+build/
+app/build/
+app/.cxx/
+
+# Local Android/IDE state
+local.properties
+.idea/
+*.iml
+
+# Native dependency caches and vendored checkout
+native/vcpkg_installed/
+third_party/vcpkg/
+third_party/vcpkg-bincache/
+
+# Downloaded tool distributions
+gradle-8.2.1/
+gradle-8.2.1-bin.zip
+
+# Logs, generated archives, and packaged artifacts
+*.log
+*.apk
+*.aab
+*.keystore
+*.jks
+*.idsig
+keystore.properties
+/release/
+
+# Local SSH host-key file used by Codex for this repo setup
+.codex_known_hosts

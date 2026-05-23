@@ -1,0 +1,280 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/libauto_outer_bg">
+
+    <LinearLayout
+        android:id="@+id/launcher_container"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/libauto_view_bg"
+        android:orientation="vertical">
+
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:fillViewport="true"
+            android:overScrollMode="never">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:gravity="center"
+                android:orientation="vertical"
+                android:paddingHorizontal="36dp"
+                android:paddingVertical="30dp">
+
+                <ImageView
+                    android:id="@+id/app_logo"
+                    android:layout_width="64dp"
+                    android:layout_height="64dp"
+                    android:layout_marginBottom="14dp"
+                    android:contentDescription="@string/app_name"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/logo" />
+
+                <TextView
+                    android:id="@+id/status_text"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:gravity="center"
+                    android:text="@string/device_picker_title"
+                    android:textColor="@color/libauto_text"
+                    android:textSize="28sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/device_picker_hint"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:gravity="center"
+                    android:text="@string/device_picker_hint"
+                    android:textColor="@color/libauto_muted"
+                    android:textSize="14sp" />
+
+                <LinearLayout
+                    android:layout_width="560dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="20dp"
+                    android:background="@drawable/card_bg"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <TextView
+                        android:id="@+id/projection_resolution_title"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:letterSpacing="0.14"
+                        android:text="@string/projection_resolution_title"
+                        android:textAllCaps="true"
+                        android:textColor="@color/libauto_muted"
+                        android:textSize="11sp"
+                        android:textStyle="bold" />
+
+                    <RadioGroup
+                        android:id="@+id/projection_resolution_group"
+                        android:layout_width="match_parent"
+                        android:layout_height="40dp"
+                        android:layout_marginTop="12dp"
+                        android:background="@drawable/segmented_bg"
+                        android:gravity="center"
+                        android:orientation="horizontal"
+                        android:padding="3dp">
+
+                        <RadioButton
+                            android:id="@+id/projection_resolution_480p"
+                            android:layout_width="0dp"
+                            android:layout_height="match_parent"
+                            android:layout_weight="1"
+                            android:background="@drawable/projection_segment_selector"
+                            android:button="@null"
+                            android:gravity="center"
+                            android:text="@string/projection_resolution_480p"
+                            android:textColor="@color/projection_segment_text"
+                            android:textSize="14sp"
+                            android:textStyle="bold" />
+
+                        <RadioButton
+                            android:id="@+id/projection_resolution_720p"
+                            android:layout_width="0dp"
+                            android:layout_height="match_parent"
+                            android:layout_weight="1"
+                            android:background="@drawable/projection_segment_selector"
+                            android:button="@null"
+                            android:gravity="center"
+                            android:text="@string/projection_resolution_720p"
+                            android:textColor="@color/projection_segment_text"
+                            android:textSize="14sp"
+                            android:textStyle="bold" />
+
+                        <RadioButton
+                            android:id="@+id/projection_resolution_1080p"
+                            android:layout_width="0dp"
+                            android:layout_height="match_parent"
+                            android:layout_weight="1"
+                            android:background="@drawable/projection_segment_selector"
+                            android:button="@null"
+                            android:gravity="center"
+                            android:text="@string/projection_resolution_1080p"
+                            android:textColor="@color/projection_segment_text"
+                            android:textSize="14sp"
+                            android:textStyle="bold" />
+                    </RadioGroup>
+
+                    <CheckBox
+                        android:id="@+id/projection_native_aspect_checkbox"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:buttonTint="@color/libauto_accent_strong"
+                        android:minHeight="34dp"
+                        android:text="@string/projection_native_aspect"
+                        android:textColor="@color/libauto_text"
+                        android:textSize="14sp" />
+
+                    <TextView
+                        android:id="@+id/projection_resolution_hint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="start"
+                        android:text="@string/projection_resolution_hint"
+                        android:textColor="@color/libauto_dim"
+                        android:textSize="12sp" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="560dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:background="@drawable/card_bg"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:letterSpacing="0.14"
+                        android:text="@string/usb_devices_title"
+                        android:textAllCaps="true"
+                        android:textColor="@color/libauto_muted"
+                        android:textSize="11sp"
+                        android:textStyle="bold" />
+
+                    <LinearLayout
+                        android:id="@+id/usb_device_list"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:orientation="vertical" />
+
+                    <CheckBox
+                        android:id="@+id/autoconnect_checkbox"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:buttonTint="@color/libauto_accent_strong"
+                        android:minHeight="34dp"
+                        android:text="@string/autoconnect_single_device"
+                        android:textColor="@color/libauto_text"
+                        android:textSize="14sp" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/usb_log_status"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:gravity="center"
+                    android:text="@string/launcher_footer"
+                    android:textColor="@color/libauto_dim"
+                    android:textSize="12sp" />
+            </LinearLayout>
+        </ScrollView>
+    </LinearLayout>
+
+    <FrameLayout
+        android:id="@+id/projection_container"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/black"
+        android:visibility="gone">
+
+        <FrameLayout
+            android:id="@+id/video_viewport"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_gravity="center"
+            android:clipChildren="true"
+            android:clipToPadding="true">
+
+            <SurfaceView
+                android:id="@+id/video_surface"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+        </FrameLayout>
+
+        <TextView
+            android:id="@+id/projection_status"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|center_horizontal"
+            android:layout_marginTop="16dp"
+            android:background="@drawable/projection_status_bg"
+            android:paddingHorizontal="14dp"
+            android:paddingVertical="8dp"
+            android:text="@string/projection_connecting"
+            android:textColor="@color/white"
+            android:textSize="14sp" />
+    </FrameLayout>
+
+    <LinearLayout
+        android:id="@+id/hidden_controls"
+        android:layout_width="1dp"
+        android:layout_height="1dp"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <TextView android:id="@+id/device_ip_text" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <TextView android:id="@+id/wifi_ssid_text" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <TextView android:id="@+id/hotspot_text" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <Button android:id="@+id/start_button" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <Button android:id="@+id/stop_button" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <TextView android:id="@+id/usb_devices_text" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <TextView android:id="@+id/usb_permission_text" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <TextView android:id="@+id/usb_selected_text" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <TextView android:id="@+id/usb_endpoints_text" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <TextView android:id="@+id/usb_accessory_text" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <TextView android:id="@+id/usb_state_text" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <TextView android:id="@+id/usb_summary_text" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <TextView android:id="@+id/usb_counters_text" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <Button android:id="@+id/usb_send_button" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <Button android:id="@+id/usb_enable_aoap_button" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <Button android:id="@+id/usb_start_aa_button" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <Button android:id="@+id/usb_export_logs_button" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <Button android:id="@+id/usb_export_logcat_button" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <Button android:id="@+id/usb_share_logs_button" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <Button android:id="@+id/usb_probe_button" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <TextView android:id="@+id/usb_probe_results" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <EditText android:id="@+id/aoap_manufacturer_input" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <EditText android:id="@+id/aoap_model_input" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <EditText android:id="@+id/aoap_description_input" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <EditText android:id="@+id/aoap_version_input" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <EditText android:id="@+id/aoap_uri_input" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <EditText android:id="@+id/aoap_serial_input" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <Button android:id="@+id/aoap_save_button" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <TextView android:id="@+id/transport_status" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <TextView android:id="@+id/transport_counters" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <TextView android:id="@+id/transport_ping_status" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <Button android:id="@+id/transport_toggle_button" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <Button android:id="@+id/transport_send_button" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <Button android:id="@+id/transport_ping_button" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <Button android:id="@+id/transport_save_logs_button" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <EditText android:id="@+id/target_ip_input" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <EditText android:id="@+id/target_port_input" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <Button android:id="@+id/test_video_button" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <Button android:id="@+id/test_audio_button" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+    </LinearLayout>
+</FrameLayout>

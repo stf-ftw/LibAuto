@@ -1,0 +1,19 @@
+<resources>
+    <color name="black">#000000</color>
+    <color name="white">#FFFFFF</color>
+    <color name="accent">#9141AC</color>
+    <color name="libauto_outer_bg">#0E0E0E</color>
+    <color name="libauto_window_bg">#1E1E1E</color>
+    <color name="libauto_view_bg">#242424</color>
+    <color name="libauto_header_bg">#303030</color>
+    <color name="libauto_card_bg">#343434</color>
+    <color name="libauto_row_bg">#3D3D3D</color>
+    <color name="libauto_segment_bg">#272727</color>
+    <color name="libauto_text">#F6F5F4</color>
+    <color name="libauto_muted">#C0BFBC</color>
+    <color name="libauto_dim">#9A9996</color>
+    <color name="libauto_accent">#9141AC</color>
+    <color name="libauto_accent_strong">#A56CC1</color>
+    <color name="libauto_accent_bg">#38463050</color>
+    <color name="libauto_border">#1AFFFFFF</color>
+</resources>

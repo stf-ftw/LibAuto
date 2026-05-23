@@ -1,0 +1,123 @@
+cmake_minimum_required(VERSION 3.5.1)
+project(aasdk CXX)
+
+set(base_directory ${CMAKE_CURRENT_SOURCE_DIR})
+set(sources_directory ${base_directory}/src)
+
+set(include_directory ${base_directory}/include)
+set(include_ut_directory ${base_directory}/include_ut)
+
+if(NOT DEFINED AASDK_OUTPUT_DIRECTORY)
+    set(AASDK_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+endif()
+
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${AASDK_OUTPUT_DIRECTORY}/lib)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${AASDK_OUTPUT_DIRECTORY}/lib)
+
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${AASDK_OUTPUT_DIRECTORY}/bin)
+set(EXECUTABLE_OUTPUT_PATH ${AASDK_OUTPUT_DIRECTORY}/bin)
+
+SET(CMAKE_CXX_STANDARD 17)
+set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${PROJECT_SOURCE_DIR}/cmake_modules/")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS_INIT} -fPIC -Wall -pedantic")
+set(CMAKE_CXX_FLAGS_DEBUG "-g -O0")
+set(CMAKE_CXX_FLAGS_RELEASE "-g -O3")
+
+set(Boost_USE_STATIC_LIBS ON)
+set(Boost_USE_MULTITHREADED ON)
+set(Boost_USE_STATIC_RUNTIME OFF)
+set(Boost_NO_BOOST_CMAKE ON)
+
+add_definitions(-DBOOST_ALL_DYN_LINK -DBOOST_ASIO_ENABLE_OLD_SERVICES)
+
+if(WIN32)
+    set(WINSOCK2_LIBRARIES "ws2_32")
+endif(WIN32)
+
+if(AASDK_TEST)
+    include(ExternalGtest)
+endif(AASDK_TEST)
+
+add_subdirectory(aasdk_proto)
+
+if(DEFINED Boost_ROOT)
+    set(Boost_INCLUDE_DIRS "${Boost_ROOT}/include")
+    set(_AASDK_BOOST_LIB_DIR "${Boost_ROOT}/lib")
+    set(_AASDK_BOOST_LIB_DIR_DEBUG "${Boost_ROOT}/debug/lib")
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug" AND EXISTS "${_AASDK_BOOST_LIB_DIR_DEBUG}/libboost_system.a")
+        set(Boost_LIBRARIES "")
+        if(EXISTS "${_AASDK_BOOST_LIB_DIR_DEBUG}/libboost_system.a")
+            list(APPEND Boost_LIBRARIES "${_AASDK_BOOST_LIB_DIR_DEBUG}/libboost_system.a")
+        endif()
+        list(APPEND Boost_LIBRARIES
+                "${_AASDK_BOOST_LIB_DIR_DEBUG}/libboost_log.a"
+                "${_AASDK_BOOST_LIB_DIR_DEBUG}/libboost_filesystem.a"
+                "${_AASDK_BOOST_LIB_DIR_DEBUG}/libboost_thread.a")
+    else()
+        set(Boost_LIBRARIES "")
+        if(EXISTS "${_AASDK_BOOST_LIB_DIR}/libboost_system.a")
+            list(APPEND Boost_LIBRARIES "${_AASDK_BOOST_LIB_DIR}/libboost_system.a")
+        endif()
+        list(APPEND Boost_LIBRARIES
+                "${_AASDK_BOOST_LIB_DIR}/libboost_log.a"
+                "${_AASDK_BOOST_LIB_DIR}/libboost_filesystem.a"
+                "${_AASDK_BOOST_LIB_DIR}/libboost_thread.a")
+    endif()
+    unset(_AASDK_BOOST_LIB_DIR)
+    unset(_AASDK_BOOST_LIB_DIR_DEBUG)
+else()
+    find_package(Boost MODULE REQUIRED COMPONENTS system log filesystem thread OPTIONAL_COMPONENTS unit_test_framework)
+endif()
+find_package(libusb-1.0 REQUIRED)
+find_package(Protobuf CONFIG REQUIRED)
+find_package(OpenSSL REQUIRED)
+
+set(AASDK_PROTO_INCLUDE_DIRS ${CMAKE_CURRENT_BINARY_DIR})
+
+
+include_directories(${AASDK_PROTO_INCLUDE_DIRS}
+                        ${Boost_INCLUDE_DIRS}
+                        ${LIBUSB_1_INCLUDE_DIRS}
+                        ${Protobuf_INCLUDE_DIRS}
+                        ${OPENSSL_INCLUDE_DIR}
+                        ${GTEST_INCLUDE_DIRS}
+                        ${GMOCK_INCLUDE_DIRS}
+                        ${include_directory}
+                        ${include_ut_directory})
+
+file(GLOB_RECURSE source_files ${sources_directory}/*.cpp)
+file(GLOB_RECURSE include_files ${include_directory}/*.hpp)
+file(GLOB_RECURSE tests_source_files ${sources_directory}/*.ut.cpp)
+file(GLOB_RECURSE tests_include_files ${include_ut_directory}/*.hpp)
+
+list(REMOVE_ITEM source_files ${tests_source_files})
+
+add_library(aasdk SHARED
+                ${source_files}
+                ${include_files})
+
+add_dependencies(aasdk aasdk_proto)
+target_link_libraries(aasdk
+                        aasdk_proto
+                        ${Boost_LIBRARIES}
+                        ${LIBUSB_1_LIBRARIES}
+                        ${OPENSSL_LIBRARIES}
+                        ${WINSOCK2_LIBRARIES})
+
+if(AASDK_TEST)
+    add_executable(aasdk_ut
+                    ${tests_source_files}
+                    ${tests_include_files})
+
+    add_dependencies(aasdk_ut aasdk)
+    target_link_libraries(aasdk_ut
+                            aasdk
+                            ${GMOCK_LIBRARY_PATH}
+                            ${GTEST_LIBRARY_PATH})
+
+    if(AASDK_CODE_COVERAGE)
+        include(CodeCoverage)
+        append_coverage_compiler_flags()
+        setup_target_for_coverage(NAME aasdk_coverage EXECUTABLE aasdk_ut DEPENDENCIES aasdk_ut)
+    endif(AASDK_CODE_COVERAGE)
+endif(AASDK_TEST)
