@@ -102,6 +102,11 @@ class MainActivity : AppCompatActivity() {
         pendingProjectionCloseReason = null
         showLauncherScreen()
     }
+    private val touchMoveHandler = Handler(Looper.getMainLooper())
+    private val sendPendingTouchMove = Runnable {
+        touchMoveScheduled = false
+        flushPendingTouchMove()
+    }
     private val wifiMonitor by lazy { WifiMonitor(this) }
     private var transportRunning = false
     private var videoTesting = false
@@ -125,6 +130,9 @@ class MainActivity : AppCompatActivity() {
     private var lastTouchSecondY = -1
     private var lastTouchPointCount = 0
     private var touchMoveCount = 0
+    private var lastTouchMoveSentMs = 0L
+    private var touchMoveScheduled = false
+    private var pendingTouchMove: PendingTouchMove? = null
     private val touchPointerSlots = mutableMapOf<Int, Int>()
     private val prefs by lazy { getSharedPreferences("transport_prefs", MODE_PRIVATE) }
     private val aoapPrefs by lazy { getSharedPreferences(Constants.AOAP_PREFS, MODE_PRIVATE) }
@@ -974,6 +982,7 @@ class MainActivity : AppCompatActivity() {
         aasdkRunning = false
         projectionStarting = false
         touchActive = false
+        clearPendingTouchMove()
         touchPointerSlots.clear()
         resetTouchMovement()
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -1241,6 +1250,7 @@ class MainActivity : AppCompatActivity() {
         val actionMasked = event.actionMasked
         val action = when (actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                clearPendingTouchMove()
                 touchActive = true
                 touchPointerSlots.clear()
                 touchPointerSlots[event.getPointerId(0)] = 0
@@ -1261,6 +1271,7 @@ class MainActivity : AppCompatActivity() {
                 if (!touchActive) {
                     return
                 }
+                flushPendingTouchMove()
                 touchActive = false
                 1
             }
@@ -1268,6 +1279,7 @@ class MainActivity : AppCompatActivity() {
                 if (!touchActive) {
                     return
                 }
+                flushPendingTouchMove()
                 1
             }
             MotionEvent.ACTION_MOVE -> {
@@ -1282,9 +1294,6 @@ class MainActivity : AppCompatActivity() {
         if (points.isEmpty()) {
             return
         }
-        if (action == 2 && shouldDropTouchMove(points)) {
-            return
-        }
         val actionSlot = when (actionMasked) {
             MotionEvent.ACTION_POINTER_DOWN,
             MotionEvent.ACTION_POINTER_UP -> {
@@ -1292,11 +1301,38 @@ class MainActivity : AppCompatActivity() {
             }
             else -> points.first().slot
         }
+        val actionIndex = points.indexOfFirst { it.slot == actionSlot }.coerceAtLeast(0)
+        if (action == 2) {
+            queueTouchMove(actionIndex, points)
+            return
+        }
+        sendTouchPoints(action, actionIndex, points)
+        rememberTouchPoints(points)
+        lastTouchMoveSentMs = SystemClock.uptimeMillis()
+        touchMoveCount += 1
+        if (actionMasked == MotionEvent.ACTION_POINTER_DOWN) {
+            resetTouchMovement(points)
+        }
+        if (actionMasked == MotionEvent.ACTION_UP || actionMasked == MotionEvent.ACTION_CANCEL) {
+            clearPendingTouchMove()
+            touchPointerSlots.clear()
+            resetTouchMovement()
+        }
+        if (actionMasked == MotionEvent.ACTION_POINTER_UP) {
+            val pointerId = event.getPointerId(event.actionIndex)
+            touchPointerSlots.remove(pointerId)
+            touchMoveHandler.removeCallbacks(sendPendingTouchMove)
+            touchMoveScheduled = false
+            resetTouchMovement(points.filter { it.slot != actionSlot })
+        }
+    }
+
+    private fun sendTouchPoints(action: Int, actionIndex: Int, points: List<TouchPoint>) {
         val p0 = points.getOrNull(0)
         val p1 = points.getOrNull(1)
         AasdkNative.nativeSendTouchMulti(
             action,
-            points.indexOfFirst { it.slot == actionSlot }.coerceAtLeast(0),
+            actionIndex,
             points.size,
             p0?.x ?: 0,
             p0?.y ?: 0,
@@ -1305,25 +1341,11 @@ class MainActivity : AppCompatActivity() {
             p1?.y ?: 0,
             (p1?.slot ?: 1) + 1
         )
-        if (action != 2) {
-            rememberTouchPoints(points)
-        }
-        when (actionMasked) {
-            MotionEvent.ACTION_POINTER_UP -> {
-                val pointerId = event.getPointerId(event.actionIndex)
-                touchPointerSlots.remove(pointerId)
-                resetTouchMovement()
-            }
-            MotionEvent.ACTION_UP,
-            MotionEvent.ACTION_CANCEL -> {
-                touchActive = false
-                touchPointerSlots.clear()
-                resetTouchMovement()
-            }
-        }
     }
 
     private data class TouchPoint(val slot: Int, val x: Int, val y: Int)
+
+    private data class PendingTouchMove(val actionIndex: Int, val points: List<TouchPoint>)
 
     private fun firstFreeTouchSlot(): Int? {
         return (0..1).firstOrNull { slot -> touchPointerSlots.values.none { it == slot } }
@@ -1350,22 +1372,49 @@ class MainActivity : AppCompatActivity() {
         }.sortedBy { it.slot }.take(2)
     }
 
+    private fun queueTouchMove(actionIndex: Int, points: List<TouchPoint>) {
+        if (shouldDropTouchMove(points)) {
+            return
+        }
+        pendingTouchMove = PendingTouchMove(actionIndex, points)
+        if (touchMoveScheduled) {
+            return
+        }
+        val now = SystemClock.uptimeMillis()
+        val delayMs = if (lastTouchMoveSentMs == 0L) {
+            0L
+        } else {
+            (TOUCH_MOVE_INTERVAL_MS - (now - lastTouchMoveSentMs)).coerceAtLeast(0L)
+        }
+        touchMoveScheduled = true
+        touchMoveHandler.postDelayed(sendPendingTouchMove, delayMs)
+    }
+
+    private fun flushPendingTouchMove() {
+        val pending = pendingTouchMove ?: return
+        pendingTouchMove = null
+        sendTouchPoints(2, pending.actionIndex, pending.points)
+        lastTouchMoveSentMs = SystemClock.uptimeMillis()
+        rememberTouchPoints(pending.points)
+        touchMoveCount += 1
+        if (pendingTouchMove != null && !touchMoveScheduled) {
+            touchMoveScheduled = true
+            touchMoveHandler.postDelayed(sendPendingTouchMove, TOUCH_MOVE_INTERVAL_MS)
+        }
+    }
+
+    private fun clearPendingTouchMove() {
+        pendingTouchMove = null
+        touchMoveScheduled = false
+        touchMoveHandler.removeCallbacks(sendPendingTouchMove)
+    }
+
     private fun shouldDropTouchMove(points: List<TouchPoint>): Boolean {
         val now = SystemClock.uptimeMillis()
         if (isStationaryTouchMove(points)) {
             return true
         }
-        val minIntervalMs = if (points.size > 1) {
-            TOUCH_MOVE_MULTI_INTERVAL_MS
-        } else {
-            TOUCH_MOVE_SINGLE_INTERVAL_MS
-        }
-        if (lastTouchMoveMs != 0L && now - lastTouchMoveMs < minIntervalMs) {
-            return true
-        }
         lastTouchMoveMs = now
-        rememberTouchPoints(points)
-        touchMoveCount += 1
         return false
     }
 
@@ -1397,11 +1446,18 @@ class MainActivity : AppCompatActivity() {
 
     private fun resetTouchMovement() {
         lastTouchMoveMs = 0L
+        lastTouchMoveSentMs = 0L
         lastTouchX = -1
         lastTouchY = -1
         lastTouchSecondX = -1
         lastTouchSecondY = -1
         lastTouchPointCount = 0
+    }
+
+    private fun resetTouchMovement(points: List<TouchPoint>) {
+        lastTouchMoveMs = 0L
+        lastTouchMoveSentMs = SystemClock.uptimeMillis()
+        rememberTouchPoints(points)
     }
 
     private fun dp(value: Int): Int {
@@ -1583,8 +1639,7 @@ class MainActivity : AppCompatActivity() {
         const val AA_KEYCODE_MEDIA_FAST_FORWARD = 90
         const val AA_KEYCODE_MEDIA_PLAY = 126
         const val AA_KEYCODE_MEDIA_PAUSE = 127
-        const val TOUCH_MOVE_SINGLE_INTERVAL_MS = 50L
-        const val TOUCH_MOVE_MULTI_INTERVAL_MS = 80L
-        const val TOUCH_MOVE_DEAD_ZONE_PX = 10
+        const val TOUCH_MOVE_INTERVAL_MS = 16L
+        const val TOUCH_MOVE_DEAD_ZONE_PX = 2
     }
 }

@@ -92,8 +92,8 @@ constexpr int kAudioInputChannels = 1;
 constexpr int kAudioBitDepth = 16;
 constexpr uint32_t kMaxUnacked = 1;
 constexpr uint32_t kMediaAudioMaxUnacked = 4;
-constexpr int32_t kMaxTouchInFlight = 1;
-constexpr int32_t kMaxTouchHardLimit = 4;
+constexpr int32_t kMaxTouchInFlight = 2;
+constexpr int32_t kMaxTouchHardLimit = 8;
 constexpr std::array<uint32_t, 20> kSupportedButtonCodes = {
     3,     // HOME
     4,     // BACK
