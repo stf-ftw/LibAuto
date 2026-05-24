@@ -2,8 +2,8 @@
 
 Current release build:
 
-- Version name: `0.2`
-- Version code: `2`
+- Version name: `0.3`
+- Version code: `3`
 - Application id: `ro.stf_ftw.libauto`
 - Minimum SDK: 26
 - ABIs: `armeabi-v7a`, `arm64-v8a`
