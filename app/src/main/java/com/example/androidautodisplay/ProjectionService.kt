@@ -165,7 +165,7 @@ class ProjectionService : Service() {
                 appendUsbLog("Wireless AA start requested")
                 CarSensorBridge.start()
                 applyProjectionResolutionSetting()
-                val ok = wirelessController.start(Constants.DEFAULT_TRANSPORT_PORT)
+                val ok = wirelessController.start(Constants.DEFAULT_WIRELESS_AA_PORT)
                 appendUsbLog("Wireless AA start result: $ok")
             }
             Constants.ACTION_WIRELESS_STOP -> {

@@ -3,6 +3,14 @@ package com.example.androidautodisplay
 import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothGatt
+import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattServer
+import android.bluetooth.BluetoothGattServerCallback
+import android.bluetooth.BluetoothGattService
+import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothProfile
 import android.bluetooth.BluetoothServerSocket
 import android.bluetooth.BluetoothSocket
 import android.bluetooth.le.AdvertiseCallback
@@ -35,11 +43,13 @@ class WirelessAaController(
 
     private val appContext = context.applicationContext
     private val wifiManager = appContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+    private val bluetoothManager = appContext.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
     private val mainHandler = Handler(Looper.getMainLooper())
     private val running = AtomicBoolean(false)
     private var hotspotReservation: WifiManager.LocalOnlyHotspotReservation? = null
     private val serverSockets = mutableListOf<BluetoothServerSocket>()
     private val bleAdvertiseCallbacks = mutableListOf<AdvertiseCallback>()
+    private var gattServer: BluetoothGattServer? = null
     private var clientSocket: BluetoothSocket? = null
     private val workers = mutableListOf<Thread>()
     @Volatile private var currentSnapshot = Snapshot("stopped", "Wireless Android Auto stopped")
@@ -66,6 +76,7 @@ class WirelessAaController(
         running.set(false)
         closeBluetooth()
         stopBleAdvertising()
+        stopBleGattServer()
         stopHotspot()
         AasdkNative.nativeStopAaSession()
         update("stopped", "Wireless Android Auto stopped")
@@ -136,6 +147,7 @@ class WirelessAaController(
             running.set(false)
             return
         }
+        startBleGattServer()
         startBleAdvertising(adapter)
         for (endpoint in AA_WIRELESS_ENDPOINTS) {
             val worker = Thread({
@@ -171,7 +183,7 @@ class WirelessAaController(
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
-            .setConnectable(false)
+            .setConnectable(true)
             .build()
         for (endpoint in AA_BLE_ENDPOINTS) {
             val callback = object : AdvertiseCallback() {
@@ -204,6 +216,85 @@ class WirelessAaController(
     }
 
     @SuppressLint("MissingPermission")
+    private fun startBleGattServer() {
+        if (!hasBluetoothPermission()) {
+            logger("Wireless BLE GATT skipped: Bluetooth permission missing")
+            return
+        }
+        if (gattServer != null) {
+            return
+        }
+        try {
+            val server = bluetoothManager.openGattServer(appContext, object : BluetoothGattServerCallback() {
+                override fun onConnectionStateChange(device: BluetoothDevice?, status: Int, newState: Int) {
+                    val name = try {
+                        device?.name
+                    } catch (_: Exception) {
+                        null
+                    } ?: device?.address ?: "phone"
+                    val state = if (newState == BluetoothProfile.STATE_CONNECTED) "connected" else "disconnected"
+                    update("ble_gatt_$state", "BLE GATT $state: $name status=$status")
+                }
+
+                override fun onServiceAdded(status: Int, service: BluetoothGattService?) {
+                    logger("Wireless BLE GATT service added ${service?.uuid} status=$status")
+                }
+
+                override fun onCharacteristicReadRequest(
+                    device: BluetoothDevice?,
+                    requestId: Int,
+                    offset: Int,
+                    characteristic: BluetoothGattCharacteristic?
+                ) {
+                    logger("Wireless BLE GATT read ${characteristic?.uuid} offset=$offset")
+                    gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, ByteArray(0))
+                }
+
+                override fun onCharacteristicWriteRequest(
+                    device: BluetoothDevice?,
+                    requestId: Int,
+                    characteristic: BluetoothGattCharacteristic?,
+                    preparedWrite: Boolean,
+                    responseNeeded: Boolean,
+                    offset: Int,
+                    value: ByteArray?
+                ) {
+                    logger(
+                        "Wireless BLE GATT write ${characteristic?.uuid} bytes=${value?.size ?: 0} " +
+                            "prepared=$preparedWrite response=$responseNeeded offset=$offset"
+                    )
+                    if (responseNeeded) {
+                        gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, ByteArray(0))
+                    }
+                }
+            }) ?: run {
+                logger("Wireless BLE GATT unavailable")
+                return
+            }
+            gattServer = server
+            for (endpoint in AA_BLE_ENDPOINTS) {
+                val service = BluetoothGattService(endpoint.uuid, BluetoothGattService.SERVICE_TYPE_PRIMARY)
+                service.addCharacteristic(
+                    BluetoothGattCharacteristic(
+                        endpoint.characteristicUuid,
+                        BluetoothGattCharacteristic.PROPERTY_READ or
+                            BluetoothGattCharacteristic.PROPERTY_WRITE or
+                            BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE,
+                        BluetoothGattCharacteristic.PERMISSION_READ or
+                            BluetoothGattCharacteristic.PERMISSION_WRITE
+                    )
+                )
+                server.addService(service)
+            }
+            logger("Wireless BLE GATT server started")
+        } catch (ex: Exception) {
+            LogFileHelper.appendException(appContext, "Wireless BLE GATT start failed", ex)
+            logger("Wireless BLE GATT start failed: ${ex.message}")
+            stopBleGattServer()
+        }
+    }
+
+    @SuppressLint("MissingPermission")
     private fun listenForBluetoothClient(
         adapter: BluetoothAdapter,
         endpoint: RfcommEndpoint,
@@ -216,12 +307,12 @@ class WirelessAaController(
         try {
             val socket = if (endpoint.secure) {
                 adapter.listenUsingRfcommWithServiceRecord(
-                    "LibAuto Wireless Android Auto",
+                    RFCOMM_SERVICE_NAME,
                     endpoint.uuid
                 )
             } else {
                 adapter.listenUsingInsecureRfcommWithServiceRecord(
-                    "LibAuto Wireless Android Auto",
+                    RFCOMM_SERVICE_NAME,
                     endpoint.uuid
                 )
             }
@@ -339,6 +430,15 @@ class WirelessAaController(
         bleAdvertiseCallbacks.clear()
     }
 
+    @SuppressLint("MissingPermission")
+    private fun stopBleGattServer() {
+        try {
+            gattServer?.close()
+        } catch (_: Exception) {
+        }
+        gattServer = null
+    }
+
     private fun closeServerSocketsExcept(keep: BluetoothServerSocket) {
         synchronized(serverSockets) {
             serverSockets.filter { it !== keep }.forEach {
@@ -412,7 +512,12 @@ class WirelessAaController(
     }
 
     private companion object {
-        data class RfcommEndpoint(val uuid: UUID, val label: String, val secure: Boolean)
+        data class RfcommEndpoint(
+            val uuid: UUID,
+            val label: String,
+            val secure: Boolean,
+            val characteristicUuid: UUID = UUID.fromString("4de17a01-52cb-11e6-bdf4-0800200c9a66")
+        )
 
         /*
             OpenAuto registers 4de17a00-52cb-11e6-bdf4-0800200c9a66, while newer
@@ -428,9 +533,13 @@ class WirelessAaController(
             RfcommEndpoint(UUID.fromString("669a0c20-0008-f4bd-e611-cb52007ae14d"), "openauto-reversed-insecure", false)
         )
         val AA_BLE_ENDPOINTS: List<RfcommEndpoint> = listOf(
-            RfcommEndpoint(UUID.fromString("4de17a00-52cb-11e6-bdf4-0800200c9a66"), "openauto-ble", false),
-            RfcommEndpoint(UUID.fromString("4de48490-8ab7-4fd6-970a-0ae4142618e3"), "aa-wireless-ble", false),
-            RfcommEndpoint(UUID.fromString("669a0c20-0008-f4bd-e611-cb52007ae14d"), "openauto-reversed-ble", false)
+            RfcommEndpoint(
+                UUID.fromString("4de17a00-52cb-11e6-bdf4-0800200c9a66"),
+                "openauto-ble",
+                false,
+                UUID.fromString("4de17a01-52cb-11e6-bdf4-0800200c9a66")
+            )
         )
+        const val RFCOMM_SERVICE_NAME = "OpenAuto Bluetooth Service"
     }
 }

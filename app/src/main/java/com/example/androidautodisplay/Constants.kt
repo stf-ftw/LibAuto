@@ -94,6 +94,7 @@ object Constants {
     const val NOTIFICATION_CHANNEL_ID = "projection_channel"
     const val NOTIFICATION_ID = 1001
     const val DEFAULT_TRANSPORT_PORT = 5277
+    const val DEFAULT_WIRELESS_AA_PORT = 5000
 
     fun normalizeAoapValue(key: String, value: String?): String {
         return when (key) {

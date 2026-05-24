@@ -85,7 +85,7 @@
     <string name="usb_devices_title">USB devices</string>
     <string name="launcher_footer">No background setup needed. Connect by USB and start Android Auto.</string>
     <string name="wireless_title">Wireless Android Auto</string>
-    <string name="wireless_hint">Experimental. Starts a local hotspot, Bluetooth RFCOMM bootstrap, and AA TCP listener on port 5277.</string>
+    <string name="wireless_hint">Experimental. Starts a local hotspot, Bluetooth RFCOMM bootstrap, and AA TCP listener on port 5000.</string>
     <string name="wireless_start">Start wireless</string>
     <string name="wireless_stop">Stop wireless</string>
     <string name="wireless_status_idle">Wireless stopped</string>
