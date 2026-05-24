@@ -89,6 +89,7 @@
     <string name="media_keys_title">Media keys</string>
     <string name="media_keys_hint">Learn head-unit buttons and map them to Android Auto controls.</string>
     <string name="media_keys_configure">Configure media keys</string>
+    <string name="open_settings">Open settings</string>
     <string name="media_keys_summary_none">No custom media keys mapped</string>
     <string name="media_keys_summary_count">%1$d custom media keys mapped</string>
     <string name="media_key_settings_title">Media key mapping</string>
@@ -112,4 +113,12 @@
     <string name="media_key_voice">Voice assistant</string>
     <string name="media_key_call">Call</string>
     <string name="media_key_end_call">End call</string>
+    <string name="media_key_home">Home</string>
+    <string name="media_key_back">Back</string>
+    <string name="media_key_menu">Menu</string>
+    <string name="media_key_dpad_up">D-pad up</string>
+    <string name="media_key_dpad_down">D-pad down</string>
+    <string name="media_key_dpad_left">D-pad left</string>
+    <string name="media_key_dpad_right">D-pad right</string>
+    <string name="media_key_dpad_enter">D-pad enter</string>
 </resources>

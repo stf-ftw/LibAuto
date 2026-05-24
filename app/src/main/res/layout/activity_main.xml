@@ -182,55 +182,6 @@
                         android:textSize="14sp" />
                 </LinearLayout>
 
-                <LinearLayout
-                    android:layout_width="560dp"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="16dp"
-                    android:background="@drawable/card_bg"
-                    android:orientation="vertical"
-                    android:padding="16dp">
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:letterSpacing="0.14"
-                        android:text="@string/media_keys_title"
-                        android:textAllCaps="true"
-                        android:textColor="@color/libauto_muted"
-                        android:textSize="11sp"
-                        android:textStyle="bold" />
-
-                    <TextView
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
-                        android:text="@string/media_keys_hint"
-                        android:textColor="@color/libauto_muted"
-                        android:textSize="14sp" />
-
-                    <TextView
-                        android:id="@+id/media_key_mapping_summary"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
-                        android:text="@string/media_keys_summary_none"
-                        android:textColor="@color/libauto_dim"
-                        android:textSize="12sp" />
-
-                    <Button
-                        android:id="@+id/media_key_settings_button"
-                        android:layout_width="wrap_content"
-                        android:layout_height="40dp"
-                        android:layout_gravity="center_horizontal"
-                        android:layout_marginTop="12dp"
-                        android:background="@drawable/pill_button_secondary"
-                        android:minWidth="170dp"
-                        android:text="@string/media_keys_configure"
-                        android:textAllCaps="false"
-                        android:textColor="@color/libauto_text"
-                        android:textStyle="bold" />
-                </LinearLayout>
-
                 <TextView
                     android:id="@+id/usb_log_status"
                     android:layout_width="wrap_content"
@@ -243,6 +194,19 @@
             </LinearLayout>
         </ScrollView>
     </LinearLayout>
+
+    <ImageButton
+        android:id="@+id/media_key_settings_button"
+        android:layout_width="46dp"
+        android:layout_height="46dp"
+        android:layout_gravity="top|start"
+        android:layout_marginStart="18dp"
+        android:layout_marginTop="18dp"
+        android:background="@drawable/device_icon_bg"
+        android:contentDescription="@string/open_settings"
+        android:padding="11dp"
+        android:scaleType="center"
+        android:src="@drawable/ic_settings_24" />
 
     <FrameLayout
         android:id="@+id/projection_container"
@@ -312,6 +276,15 @@
                 android:text="@string/media_key_settings_hint"
                 android:textColor="@color/libauto_muted"
                 android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/media_key_mapping_summary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/media_keys_summary_none"
+                android:textColor="@color/libauto_dim"
+                android:textSize="12sp" />
 
             <TextView
                 android:id="@+id/media_key_learning_status"

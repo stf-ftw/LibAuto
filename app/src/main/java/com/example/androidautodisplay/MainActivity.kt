@@ -28,6 +28,7 @@ import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.RadioGroup
 import android.widget.TextView
@@ -58,7 +59,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var projectionResolutionGroup: RadioGroup
     private lateinit var projectionNativeAspectCheckbox: CheckBox
     private lateinit var autoConnectCheckbox: CheckBox
-    private lateinit var mediaKeySettingsButton: Button
+    private lateinit var mediaKeySettingsButton: ImageButton
     private lateinit var mediaKeyMappingSummary: TextView
     private lateinit var mediaKeySettingsOverlay: View
     private lateinit var mediaKeySettingsList: LinearLayout
@@ -157,6 +158,14 @@ class MainActivity : AppCompatActivity() {
     }
     private val mediaKeyActions by lazy {
         listOf(
+            MediaKeyAction("home", R.string.media_key_home, AA_KEYCODE_HOME, "HOME"),
+            MediaKeyAction("back", R.string.media_key_back, AA_KEYCODE_BACK, "BACK"),
+            MediaKeyAction("menu", R.string.media_key_menu, AA_KEYCODE_MENU, "MENU"),
+            MediaKeyAction("dpad_up", R.string.media_key_dpad_up, AA_KEYCODE_DPAD_UP, "UP"),
+            MediaKeyAction("dpad_down", R.string.media_key_dpad_down, AA_KEYCODE_DPAD_DOWN, "DOWN"),
+            MediaKeyAction("dpad_left", R.string.media_key_dpad_left, AA_KEYCODE_DPAD_LEFT, "LEFT"),
+            MediaKeyAction("dpad_right", R.string.media_key_dpad_right, AA_KEYCODE_DPAD_RIGHT, "RIGHT"),
+            MediaKeyAction("dpad_enter", R.string.media_key_dpad_enter, AA_KEYCODE_DPAD_CENTER, "ENTER"),
             MediaKeyAction("previous", R.string.media_key_previous, AA_KEYCODE_MEDIA_PREVIOUS, "PREV"),
             MediaKeyAction("next", R.string.media_key_next, AA_KEYCODE_MEDIA_NEXT, "NEXT"),
             MediaKeyAction("play_pause", R.string.media_key_play_pause, AA_KEYCODE_MEDIA_PLAY_PAUSE, "TOGGLE_PLAY"),
@@ -1028,6 +1037,8 @@ class MainActivity : AppCompatActivity() {
             LogFileHelper.appendEvent(this, "MainActivity", "showProjectionScreen")
         }
         launcherContainer.visibility = View.GONE
+        mediaKeySettingsButton.visibility = View.GONE
+        mediaKeySettingsOverlay.visibility = View.GONE
         projectionContainer.visibility = View.VISIBLE
         videoSurface.visibility = View.VISIBLE
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -1050,6 +1061,7 @@ class MainActivity : AppCompatActivity() {
         videoSurface.visibility = View.GONE
         projectionContainer.visibility = View.GONE
         launcherContainer.visibility = View.VISIBLE
+        mediaKeySettingsButton.visibility = View.VISIBLE
         projectionStatus.visibility = View.VISIBLE
         projectionStatus.text = getString(R.string.projection_connecting)
         usbLogStatusText.text = getString(R.string.launcher_footer)
