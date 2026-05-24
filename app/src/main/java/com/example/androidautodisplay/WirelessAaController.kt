@@ -5,12 +5,17 @@ import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothServerSocket
 import android.bluetooth.BluetoothSocket
+import android.bluetooth.le.AdvertiseCallback
+import android.bluetooth.le.AdvertiseData
+import android.bluetooth.le.AdvertiseSettings
+import android.bluetooth.le.BluetoothLeAdvertiser
 import android.content.Context
 import android.content.pm.PackageManager
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.ParcelUuid
 import androidx.core.content.ContextCompat
 import java.io.InputStream
 import java.io.OutputStream
@@ -34,6 +39,7 @@ class WirelessAaController(
     private val running = AtomicBoolean(false)
     private var hotspotReservation: WifiManager.LocalOnlyHotspotReservation? = null
     private val serverSockets = mutableListOf<BluetoothServerSocket>()
+    private val bleAdvertiseCallbacks = mutableListOf<AdvertiseCallback>()
     private var clientSocket: BluetoothSocket? = null
     private val workers = mutableListOf<Thread>()
     @Volatile private var currentSnapshot = Snapshot("stopped", "Wireless Android Auto stopped")
@@ -59,6 +65,7 @@ class WirelessAaController(
     fun stop() {
         running.set(false)
         closeBluetooth()
+        stopBleAdvertising()
         stopHotspot()
         AasdkNative.nativeStopAaSession()
         update("stopped", "Wireless Android Auto stopped")
@@ -78,6 +85,7 @@ class WirelessAaController(
                             "hotspot",
                             "Hotspot ready: $ssid / $password, IP ${bestLocalIpAddress()}:$port; waiting for Bluetooth bootstrap"
                         )
+                        startBleAdvertising()
                         startBluetoothServer(
                             ssid = ssid,
                             password = password,
@@ -128,12 +136,70 @@ class WirelessAaController(
             running.set(false)
             return
         }
+        startBleAdvertising(adapter)
         for (endpoint in AA_WIRELESS_ENDPOINTS) {
             val worker = Thread({
                 listenForBluetoothClient(adapter, endpoint, ssid, password, bssid, port, dynamicAp)
             }, "LibAuto-WirelessBootstrap-${endpoint.label}")
             workers += worker
             worker.start()
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun startBleAdvertising(adapter: BluetoothAdapter? = BluetoothAdapter.getDefaultAdapter()) {
+        if (!hasBleAdvertisePermission()) {
+            logger("Wireless BLE advertise skipped: permission missing")
+            return
+        }
+        if (adapter == null || !adapter.isEnabled) {
+            logger("Wireless BLE advertise skipped: Bluetooth off")
+            return
+        }
+        if (!adapter.isMultipleAdvertisementSupported) {
+            logger("Wireless BLE advertise skipped: controller does not support multiple advertisements")
+            return
+        }
+        val advertiser = adapter.bluetoothLeAdvertiser
+        if (advertiser == null) {
+            logger("Wireless BLE advertise skipped: advertiser unavailable")
+            return
+        }
+        if (bleAdvertiseCallbacks.isNotEmpty()) {
+            return
+        }
+        val settings = AdvertiseSettings.Builder()
+            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
+            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
+            .setConnectable(false)
+            .build()
+        for (endpoint in AA_BLE_ENDPOINTS) {
+            val callback = object : AdvertiseCallback() {
+                override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
+                    update(
+                        "ble_advertising",
+                        "BLE discovery advertising ${endpoint.label}; RFCOMM listeners are also active"
+                    )
+                }
+
+                override fun onStartFailure(errorCode: Int) {
+                    logger("Wireless BLE advertise failed ${endpoint.label}: $errorCode")
+                }
+            }
+            try {
+                advertiser.startAdvertising(
+                    settings,
+                    AdvertiseData.Builder()
+                        .setIncludeDeviceName(false)
+                        .addServiceUuid(ParcelUuid(endpoint.uuid))
+                        .build(),
+                    callback
+                )
+                bleAdvertiseCallbacks += callback
+            } catch (ex: Exception) {
+                LogFileHelper.appendException(appContext, "Wireless BLE advertise failed (${endpoint.label})", ex)
+                logger("Wireless BLE advertise exception ${endpoint.label}: ${ex.message}")
+            }
         }
     }
 
@@ -257,6 +323,22 @@ class WirelessAaController(
         workers.removeAll { !it.isAlive }
     }
 
+    @SuppressLint("MissingPermission")
+    private fun stopBleAdvertising() {
+        val advertiser: BluetoothLeAdvertiser = try {
+            BluetoothAdapter.getDefaultAdapter()?.bluetoothLeAdvertiser ?: return
+        } catch (_: Exception) {
+            return
+        }
+        for (callback in bleAdvertiseCallbacks) {
+            try {
+                advertiser.stopAdvertising(callback)
+            } catch (_: Exception) {
+            }
+        }
+        bleAdvertiseCallbacks.clear()
+    }
+
     private fun closeServerSocketsExcept(keep: BluetoothServerSocket) {
         synchronized(serverSockets) {
             serverSockets.filter { it !== keep }.forEach {
@@ -290,6 +372,15 @@ class WirelessAaController(
                 PackageManager.PERMISSION_GRANTED
         }
         return ContextCompat.checkSelfPermission(appContext, Manifest.permission.BLUETOOTH_CONNECT) ==
+            PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun hasBleAdvertisePermission(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            return ContextCompat.checkSelfPermission(appContext, Manifest.permission.BLUETOOTH_ADMIN) ==
+                PackageManager.PERMISSION_GRANTED
+        }
+        return ContextCompat.checkSelfPermission(appContext, Manifest.permission.BLUETOOTH_ADVERTISE) ==
             PackageManager.PERMISSION_GRANTED
     }
 
@@ -335,6 +426,11 @@ class WirelessAaController(
             RfcommEndpoint(UUID.fromString("4de48490-8ab7-4fd6-970a-0ae4142618e3"), "aa-wireless-insecure", false),
             RfcommEndpoint(UUID.fromString("669a0c20-0008-f4bd-e611-cb52007ae14d"), "openauto-reversed-secure", true),
             RfcommEndpoint(UUID.fromString("669a0c20-0008-f4bd-e611-cb52007ae14d"), "openauto-reversed-insecure", false)
+        )
+        val AA_BLE_ENDPOINTS: List<RfcommEndpoint> = listOf(
+            RfcommEndpoint(UUID.fromString("4de17a00-52cb-11e6-bdf4-0800200c9a66"), "openauto-ble", false),
+            RfcommEndpoint(UUID.fromString("4de48490-8ab7-4fd6-970a-0ae4142618e3"), "aa-wireless-ble", false),
+            RfcommEndpoint(UUID.fromString("669a0c20-0008-f4bd-e611-cb52007ae14d"), "openauto-reversed-ble", false)
         )
     }
 }
