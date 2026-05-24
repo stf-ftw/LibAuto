@@ -456,8 +456,7 @@ class ProjectionService : Service() {
     }
 
     private fun getUsbLogDir(): File {
-        val base = getExternalFilesDir(null) ?: filesDir
-        return File(base, "LibAutoLogs")
+        return LogFileHelper.getLogDir(this)
     }
 
     private fun getUsbLogUri(path: String): Uri? {

@@ -91,6 +91,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var testVideoButton: Button
     private lateinit var testAudioButton: Button
     private var aasdkRunning = false
+    private var projectionStarting = false
+    private var statusReceiverRegistered = false
     private val wifiMonitor by lazy { WifiMonitor(this) }
     private var transportRunning = false
     private var videoTesting = false
@@ -218,19 +220,7 @@ class MainActivity : AppCompatActivity() {
                     usbCountersText.text = "${getString(R.string.usb_bytes_in)}: $bytesIn  " +
                         "${getString(R.string.usb_bytes_out)}: $bytesOut"
                     usbSendTestButton.isEnabled = false
-                    if (isProjectionTerminalUsbState(state)) {
-                        showLauncherScreen()
-                    }
-                    if (state == "AA_TLS_HANDSHAKE" || state == "AA_SESSION_ACTIVE") {
-                        aasdkRunning = true
-                        showProjectionScreen()
-                        projectionStatus.visibility = if (state == "AA_SESSION_ACTIVE") {
-                            View.GONE
-                        } else {
-                            View.VISIBLE
-                        }
-                        projectionStatus.text = formatUsbState(state)
-                    }
+                    handleProjectionUsbState(state)
                     usbStartAaButton.isEnabled = state == "READY_FOR_AA" && ready && !aasdkRunning
                     usbEnableAoapButton.isEnabled = state == "PRE_AA"
                     if (!probe.isNullOrBlank()) {
@@ -552,14 +542,17 @@ class MainActivity : AppCompatActivity() {
         ContextCompat.startForegroundService(this, Intent(this, ProjectionService::class.java).apply {
             action = Constants.ACTION_USB_MONITOR_START
         })
-        registerReceiver(statusReceiver, IntentFilter().apply {
-            addAction(Constants.ACTION_USB_STATUS)
-            addAction(Constants.ACTION_WIFI_STATUS)
-            addAction(Constants.ACTION_TRANSPORT_STATUS)
-            addAction(Constants.ACTION_TRANSPORT_PING)
-            addAction(Constants.ACTION_TRANSPORT_LOGS)
-            addAction(Constants.ACTION_USB_LOGS)
-        })
+        if (!statusReceiverRegistered) {
+            registerReceiver(statusReceiver, IntentFilter().apply {
+                addAction(Constants.ACTION_USB_STATUS)
+                addAction(Constants.ACTION_WIFI_STATUS)
+                addAction(Constants.ACTION_TRANSPORT_STATUS)
+                addAction(Constants.ACTION_TRANSPORT_PING)
+                addAction(Constants.ACTION_TRANSPORT_LOGS)
+                addAction(Constants.ACTION_USB_LOGS)
+            })
+            statusReceiverRegistered = true
+        }
         hideSystemUi()
     }
 
@@ -575,7 +568,14 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
-        unregisterReceiver(statusReceiver)
+        if (statusReceiverRegistered) {
+            try {
+                unregisterReceiver(statusReceiver)
+            } catch (_: IllegalArgumentException) {
+                // Some head units deliver odd pause/resume sequences around USB attach flows.
+            }
+            statusReceiverRegistered = false
+        }
         saveTargetInputs()
     }
 
@@ -931,6 +931,8 @@ class MainActivity : AppCompatActivity() {
         }
         pendingSelectedDeviceName = null
         resetProjectionPipeline()
+        projectionStarting = true
+        aasdkRunning = false
         showProjectionScreen()
         projectionStatus.visibility = View.VISIBLE
         projectionStatus.text = getString(R.string.projection_connecting)
@@ -954,6 +956,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         aasdkRunning = false
+        projectionStarting = false
         touchActive = false
         touchPointerSlots.clear()
         resetTouchMovement()
@@ -968,8 +971,53 @@ class MainActivity : AppCompatActivity() {
         hideSystemUi()
     }
 
-    private fun isProjectionTerminalUsbState(state: String?): Boolean {
-        return state == "DISCONNECTED" || state == "ERROR" || state == "IDLE"
+    private fun handleProjectionUsbState(state: String?) {
+        when (state) {
+            "STARTING_AA",
+            "AA_TLS_HANDSHAKE" -> {
+                projectionStarting = true
+                aasdkRunning = true
+                showProjectionScreen()
+                projectionStatus.visibility = View.VISIBLE
+                projectionStatus.text = if (state == "STARTING_AA") {
+                    getString(R.string.projection_connecting)
+                } else {
+                    formatUsbState(state)
+                }
+            }
+            "AA_SESSION_ACTIVE" -> {
+                projectionStarting = false
+                aasdkRunning = true
+                showProjectionScreen()
+                projectionStatus.visibility = View.GONE
+            }
+            "READY_FOR_AA",
+            "PRE_AA",
+            "AOAP_NEGOTIATING",
+            "WAITING_FOR_AOAP_REENUMERATION" -> {
+                if (projectionStarting || aasdkRunning) {
+                    showProjectionScreen()
+                    projectionStatus.visibility = View.VISIBLE
+                    projectionStatus.text = getString(R.string.projection_connecting)
+                }
+            }
+            "DISCONNECTED" -> {
+                showLauncherScreen()
+            }
+            "ERROR" -> {
+                if (!projectionStarting && !aasdkRunning) {
+                    showLauncherScreen()
+                } else {
+                    projectionStatus.visibility = View.VISIBLE
+                    projectionStatus.text = formatUsbState(state)
+                }
+            }
+            "IDLE" -> {
+                if (!projectionStarting && !aasdkRunning) {
+                    showLauncherScreen()
+                }
+            }
+        }
     }
 
     private fun resetProjectionPipeline() {
@@ -1456,11 +1504,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun startAaSession() {
         resetProjectionPipeline()
+        projectionStarting = true
+        aasdkRunning = false
+        showProjectionScreen()
+        projectionStatus.visibility = View.VISIBLE
+        projectionStatus.text = getString(R.string.projection_connecting)
         CarSensorBridge.start()
         startService(Intent(this, ProjectionService::class.java).apply {
             action = Constants.ACTION_USB_AA_START
         })
-        aasdkRunning = true
         usbStartAaButton.isEnabled = false
     }
 

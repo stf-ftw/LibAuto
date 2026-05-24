@@ -4,12 +4,17 @@ import android.content.Context
 import java.io.File
 
 object LogFileHelper {
-    fun getNativeLogFile(context: Context): File {
+    fun getLogDir(context: Context): File {
         val base = context.getExternalFilesDir(null) ?: context.filesDir
         val dir = File(base, "LibAutoLogs")
         if (!dir.exists()) {
             dir.mkdirs()
         }
+        return dir
+    }
+
+    fun getNativeLogFile(context: Context): File {
+        val dir = getLogDir(context)
         return File(dir, "native-log.txt")
     }
 
