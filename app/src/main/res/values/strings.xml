@@ -109,6 +109,7 @@
     <string name="media_key_stop">Stop</string>
     <string name="media_key_rewind">Rewind</string>
     <string name="media_key_fast_forward">Fast forward</string>
+    <string name="media_key_voice">Voice assistant</string>
     <string name="media_key_call">Call</string>
     <string name="media_key_end_call">End call</string>
 </resources>

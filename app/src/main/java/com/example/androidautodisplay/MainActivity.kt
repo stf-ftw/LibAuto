@@ -47,7 +47,8 @@ class MainActivity : AppCompatActivity() {
     private data class MediaKeyAction(
         val key: String,
         val titleRes: Int,
-        val aaScanCode: Int
+        val aaScanCode: Int,
+        val aaName: String
     )
 
     private lateinit var launcherContainer: View
@@ -156,16 +157,14 @@ class MainActivity : AppCompatActivity() {
     }
     private val mediaKeyActions by lazy {
         listOf(
-            MediaKeyAction("previous", R.string.media_key_previous, AA_KEYCODE_MEDIA_PREVIOUS),
-            MediaKeyAction("next", R.string.media_key_next, AA_KEYCODE_MEDIA_NEXT),
-            MediaKeyAction("play_pause", R.string.media_key_play_pause, AA_KEYCODE_MEDIA_PLAY_PAUSE),
-            MediaKeyAction("play", R.string.media_key_play, AA_KEYCODE_MEDIA_PLAY),
-            MediaKeyAction("pause", R.string.media_key_pause, AA_KEYCODE_MEDIA_PAUSE),
-            MediaKeyAction("stop", R.string.media_key_stop, AA_KEYCODE_MEDIA_STOP),
-            MediaKeyAction("rewind", R.string.media_key_rewind, AA_KEYCODE_MEDIA_REWIND),
-            MediaKeyAction("fast_forward", R.string.media_key_fast_forward, AA_KEYCODE_MEDIA_FAST_FORWARD),
-            MediaKeyAction("call", R.string.media_key_call, AA_KEYCODE_CALL),
-            MediaKeyAction("end_call", R.string.media_key_end_call, AA_KEYCODE_ENDCALL)
+            MediaKeyAction("previous", R.string.media_key_previous, AA_KEYCODE_MEDIA_PREVIOUS, "PREV"),
+            MediaKeyAction("next", R.string.media_key_next, AA_KEYCODE_MEDIA_NEXT, "NEXT"),
+            MediaKeyAction("play_pause", R.string.media_key_play_pause, AA_KEYCODE_MEDIA_PLAY_PAUSE, "TOGGLE_PLAY"),
+            MediaKeyAction("play", R.string.media_key_play, AA_KEYCODE_MEDIA_PLAY, "PLAY"),
+            MediaKeyAction("pause", R.string.media_key_pause, AA_KEYCODE_MEDIA_PAUSE, "PAUSE"),
+            MediaKeyAction("voice", R.string.media_key_voice, AA_KEYCODE_MICROPHONE, "MICROPHONE_1"),
+            MediaKeyAction("call", R.string.media_key_call, AA_KEYCODE_CALL, "PHONE"),
+            MediaKeyAction("end_call", R.string.media_key_end_call, AA_KEYCODE_ENDCALL, "CALL_END")
         )
     }
     private lateinit var videoSink: VideoSink
@@ -1268,7 +1267,8 @@ class MainActivity : AppCompatActivity() {
                 maxLines = 1
             })
             addView(TextView(this@MainActivity).apply {
-                text = mediaKeyMappingLabel(action) ?: getString(R.string.media_key_not_mapped)
+                val mapping = mediaKeyMappingLabel(action) ?: getString(R.string.media_key_not_mapped)
+                text = "$mapping -> ${action.aaName} (${formatAaButtonCode(action.aaScanCode)})"
                 setTextColor(ContextCompat.getColor(this@MainActivity, R.color.libauto_dim))
                 textSize = 11f
                 maxLines = 1
@@ -1423,6 +1423,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun formatAaButtonCode(scanCode: Int): String {
+        return "0x${scanCode.toString(16).uppercase(Locale.US)}"
+    }
+
     private fun configureMediaSession() {
         val session = MediaSession(this, "LibAutoMediaKeys")
         session.setCallback(object : MediaSession.Callback() {
@@ -1458,17 +1462,6 @@ class MainActivity : AppCompatActivity() {
                 sendAaButtonClick(AA_KEYCODE_MEDIA_PREVIOUS)
             }
 
-            override fun onFastForward() {
-                sendAaButtonClick(AA_KEYCODE_MEDIA_FAST_FORWARD)
-            }
-
-            override fun onRewind() {
-                sendAaButtonClick(AA_KEYCODE_MEDIA_REWIND)
-            }
-
-            override fun onStop() {
-                sendAaButtonClick(AA_KEYCODE_MEDIA_STOP)
-            }
         })
         session.setPlaybackState(
             PlaybackState.Builder()
@@ -1477,10 +1470,7 @@ class MainActivity : AppCompatActivity() {
                         PlaybackState.ACTION_PAUSE or
                         PlaybackState.ACTION_PLAY_PAUSE or
                         PlaybackState.ACTION_SKIP_TO_NEXT or
-                        PlaybackState.ACTION_SKIP_TO_PREVIOUS or
-                        PlaybackState.ACTION_FAST_FORWARD or
-                        PlaybackState.ACTION_REWIND or
-                        PlaybackState.ACTION_STOP
+                        PlaybackState.ACTION_SKIP_TO_PREVIOUS
                 )
                 .setState(PlaybackState.STATE_PLAYING, PlaybackState.PLAYBACK_POSITION_UNKNOWN, 1f)
                 .build()
@@ -1523,18 +1513,15 @@ class MainActivity : AppCompatActivity() {
             KeyEvent.KEYCODE_NUMPAD_ENTER -> AA_KEYCODE_DPAD_CENTER
             KeyEvent.KEYCODE_MENU -> AA_KEYCODE_MENU
             KeyEvent.KEYCODE_SEARCH,
-            KeyEvent.KEYCODE_VOICE_ASSIST -> AA_KEYCODE_SEARCH
+            KeyEvent.KEYCODE_VOICE_ASSIST -> AA_KEYCODE_MICROPHONE
             KeyEvent.KEYCODE_CALL -> AA_KEYCODE_CALL
             KeyEvent.KEYCODE_ENDCALL -> AA_KEYCODE_ENDCALL
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
             KeyEvent.KEYCODE_HEADSETHOOK -> AA_KEYCODE_MEDIA_PLAY_PAUSE
             KeyEvent.KEYCODE_MEDIA_PLAY -> AA_KEYCODE_MEDIA_PLAY
             KeyEvent.KEYCODE_MEDIA_PAUSE -> AA_KEYCODE_MEDIA_PAUSE
-            KeyEvent.KEYCODE_MEDIA_STOP -> AA_KEYCODE_MEDIA_STOP
             KeyEvent.KEYCODE_MEDIA_NEXT -> AA_KEYCODE_MEDIA_NEXT
             KeyEvent.KEYCODE_MEDIA_PREVIOUS -> AA_KEYCODE_MEDIA_PREVIOUS
-            KeyEvent.KEYCODE_MEDIA_REWIND -> AA_KEYCODE_MEDIA_REWIND
-            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> AA_KEYCODE_MEDIA_FAST_FORWARD
             else -> null
         }
     }
@@ -1899,13 +1886,10 @@ class MainActivity : AppCompatActivity() {
         const val AA_KEYCODE_DPAD_RIGHT = 22
         const val AA_KEYCODE_DPAD_CENTER = 23
         const val AA_KEYCODE_MENU = 82
-        const val AA_KEYCODE_SEARCH = 84
+        const val AA_KEYCODE_MICROPHONE = 84
         const val AA_KEYCODE_MEDIA_PLAY_PAUSE = 85
-        const val AA_KEYCODE_MEDIA_STOP = 86
         const val AA_KEYCODE_MEDIA_NEXT = 87
         const val AA_KEYCODE_MEDIA_PREVIOUS = 88
-        const val AA_KEYCODE_MEDIA_REWIND = 89
-        const val AA_KEYCODE_MEDIA_FAST_FORWARD = 90
         const val AA_KEYCODE_MEDIA_PLAY = 126
         const val AA_KEYCODE_MEDIA_PAUSE = 127
         const val TOUCH_MOVE_INTERVAL_MS = 16L

@@ -32,6 +32,7 @@
 #include <aasdk_proto/BluetoothPairingMethodEnum.pb.h>
 #include <aasdk_proto/BluetoothPairingResponseMessage.pb.h>
 #include <aasdk_proto/BluetoothPairingStatusEnum.pb.h>
+#include <aasdk_proto/ButtonCodeEnum.pb.h>
 #include <aasdk_proto/DrivingStatusEnum.pb.h>
 #include <aasdk_proto/GearEnum.pb.h>
 #include <aasdk_proto/ChannelDescriptorData.pb.h>
@@ -100,27 +101,23 @@ constexpr uint32_t kMaxUnacked = 1;
 constexpr uint32_t kMediaAudioMaxUnacked = 4;
 constexpr int32_t kMaxTouchInFlight = 2;
 constexpr int32_t kMaxTouchHardLimit = 8;
-constexpr std::array<uint32_t, 20> kSupportedButtonCodes = {
-    3,     // HOME
-    4,     // BACK
-    5,     // CALL
-    6,     // ENDCALL
-    19,    // DPAD_UP
-    20,    // DPAD_DOWN
-    21,    // DPAD_LEFT
-    22,    // DPAD_RIGHT
-    23,    // DPAD_CENTER
-    82,    // MENU
-    84,    // SEARCH / voice
-    85,    // MEDIA_PLAY_PAUSE
-    86,    // MEDIA_STOP
-    87,    // MEDIA_NEXT
-    88,    // MEDIA_PREVIOUS
-    89,    // MEDIA_REWIND
-    90,    // MEDIA_FAST_FORWARD
-    126,   // MEDIA_PLAY
-    127,   // MEDIA_PAUSE
-    65538  // NAVIGATION
+constexpr std::array<uint32_t, 16> kSupportedButtonCodes = {
+    static_cast<uint32_t>(proto::enums::ButtonCode::MENU),
+    static_cast<uint32_t>(proto::enums::ButtonCode::HOME),
+    static_cast<uint32_t>(proto::enums::ButtonCode::BACK),
+    static_cast<uint32_t>(proto::enums::ButtonCode::PHONE),
+    static_cast<uint32_t>(proto::enums::ButtonCode::CALL_END),
+    static_cast<uint32_t>(proto::enums::ButtonCode::UP),
+    static_cast<uint32_t>(proto::enums::ButtonCode::DOWN),
+    static_cast<uint32_t>(proto::enums::ButtonCode::LEFT),
+    static_cast<uint32_t>(proto::enums::ButtonCode::RIGHT),
+    static_cast<uint32_t>(proto::enums::ButtonCode::ENTER),
+    static_cast<uint32_t>(proto::enums::ButtonCode::MICROPHONE_1),
+    static_cast<uint32_t>(proto::enums::ButtonCode::TOGGLE_PLAY),
+    static_cast<uint32_t>(proto::enums::ButtonCode::NEXT),
+    static_cast<uint32_t>(proto::enums::ButtonCode::PREV),
+    static_cast<uint32_t>(proto::enums::ButtonCode::PLAY),
+    static_cast<uint32_t>(proto::enums::ButtonCode::PAUSE)
 };
 
 std::atomic<bool> g_running{false};
@@ -1229,8 +1226,24 @@ public:
                          "AA input binding request scan_codes=%d",
                          request.scan_codes_size());
         if (auto channel = channel_.lock()) {
+            auto status = proto::enums::Status::OK;
+            for (int i = 0; i < request.scan_codes_size(); ++i) {
+                const auto scan_code = static_cast<uint32_t>(request.scan_codes(i));
+                const auto supported = std::find(
+                    kSupportedButtonCodes.begin(),
+                    kSupportedButtonCodes.end(),
+                    scan_code
+                ) != kSupportedButtonCodes.end();
+                if (!supported) {
+                    native_log::Logf(LOG_TAG, "W",
+                                     "AA input binding unsupported scan_code=%u",
+                                     scan_code);
+                    status = proto::enums::Status::FAIL;
+                    break;
+                }
+            }
             proto::messages::BindingResponse response;
-            response.set_status(proto::enums::Status::OK);
+            response.set_status(status);
             auto promise = channel::SendPromise::defer(strand_);
             promise->then(
                 []() {},
