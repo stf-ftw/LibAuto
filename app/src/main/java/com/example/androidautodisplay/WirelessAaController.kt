@@ -27,6 +27,7 @@ import android.os.ParcelUuid
 import androidx.core.content.ContextCompat
 import java.io.InputStream
 import java.io.OutputStream
+import java.io.File
 import java.net.NetworkInterface
 import java.util.Locale
 import java.util.UUID
@@ -46,10 +47,12 @@ class WirelessAaController(
     private val bluetoothManager = appContext.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
     private val mainHandler = Handler(Looper.getMainLooper())
     private val running = AtomicBoolean(false)
+    private val bootstrapConnected = AtomicBoolean(false)
     private var hotspotReservation: WifiManager.LocalOnlyHotspotReservation? = null
     private val serverSockets = mutableListOf<BluetoothServerSocket>()
     private val bleAdvertiseCallbacks = mutableListOf<AdvertiseCallback>()
     private var gattServer: BluetoothGattServer? = null
+    @Volatile private var bleAdvertiseBroken = false
     private var clientSocket: BluetoothSocket? = null
     private val workers = mutableListOf<Thread>()
     @Volatile private var currentSnapshot = Snapshot("stopped", "Wireless Android Auto stopped")
@@ -60,6 +63,8 @@ class WirelessAaController(
         if (!running.compareAndSet(false, true)) {
             return true
         }
+        bootstrapConnected.set(false)
+        bleAdvertiseBroken = false
         update("starting", "Starting wireless Android Auto")
         val nativeStarted = AasdkNative.nativeStartAaOverTcp(port)
         if (!nativeStarted) {
@@ -96,7 +101,6 @@ class WirelessAaController(
                             "hotspot",
                             "Hotspot ready: $ssid / $password, IP ${bestLocalIpAddress()}:$port; waiting for Bluetooth bootstrap"
                         )
-                        startBleAdvertising()
                         startBluetoothServer(
                             ssid = ssid,
                             password = password,
@@ -104,6 +108,7 @@ class WirelessAaController(
                             port = port,
                             dynamicAp = true
                         )
+                        startHotspotClientMonitor()
                     }
 
                     override fun onFailed(reason: Int) {
@@ -156,10 +161,15 @@ class WirelessAaController(
             workers += worker
             worker.start()
         }
+        startOutboundBluetoothBootstrap(adapter, ssid, password, bssid, port, dynamicAp)
     }
 
     @SuppressLint("MissingPermission")
     private fun startBleAdvertising(adapter: BluetoothAdapter? = BluetoothAdapter.getDefaultAdapter()) {
+        if (bleAdvertiseBroken) {
+            logger("Wireless BLE advertise skipped: framework already failed this run")
+            return
+        }
         if (!hasBleAdvertisePermission()) {
             logger("Wireless BLE advertise skipped: permission missing")
             return
@@ -209,7 +219,7 @@ class WirelessAaController(
                 )
                 bleAdvertiseCallbacks += callback
             } catch (ex: Exception) {
-                LogFileHelper.appendException(appContext, "Wireless BLE advertise failed (${endpoint.label})", ex)
+                bleAdvertiseBroken = true
                 logger("Wireless BLE advertise exception ${endpoint.label}: ${ex.message}")
             }
         }
@@ -319,16 +329,25 @@ class WirelessAaController(
             synchronized(serverSockets) {
                 serverSockets += socket
             }
+            logger(
+                "Wireless RFCOMM listening label=${endpoint.label} uuid=${endpoint.uuid} " +
+                    "secure=${endpoint.secure}"
+            )
             update(
                 "bluetooth_listening",
                 "Bluetooth bootstrap listening on ${endpoint.label}; pair/connect from Android Auto"
             )
             val client = socket.accept() ?: return
+            if (!bootstrapConnected.compareAndSet(false, true)) {
+                client.close()
+                return
+            }
             clientSocket = client
             closeServerSocketsExcept(socket)
+            val remote = safeRemoteName(client.remoteDevice)
             update(
                 "bluetooth_connected",
-                "Bluetooth bootstrap connected on ${endpoint.label}: ${client.remoteDevice?.name ?: "phone"}"
+                "Bluetooth bootstrap connected on ${endpoint.label}: $remote"
             )
             handleRfcomm(client.inputStream, client.outputStream, ssid, password, bssid, port, dynamicAp)
         } catch (ex: Exception) {
@@ -336,6 +355,77 @@ class WirelessAaController(
                 LogFileHelper.appendException(appContext, "Wireless Bluetooth bootstrap failed (${endpoint.label})", ex)
                 logger("Wireless Bluetooth bootstrap failed on ${endpoint.label}: ${ex.message}")
             }
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun startOutboundBluetoothBootstrap(
+        adapter: BluetoothAdapter,
+        ssid: String,
+        password: String,
+        bssid: String,
+        port: Int,
+        dynamicAp: Boolean
+    ) {
+        val bondedDevices = try {
+            adapter.bondedDevices?.toList().orEmpty()
+        } catch (ex: Exception) {
+            logger("Wireless outbound RFCOMM skipped: cannot read bonded devices: ${ex.message}")
+            emptyList()
+        }
+        if (bondedDevices.isEmpty()) {
+            logger("Wireless outbound RFCOMM skipped: no bonded devices")
+            return
+        }
+        for (device in bondedDevices) {
+            for (endpoint in OUTBOUND_WIRELESS_ENDPOINTS) {
+                val worker = Thread({
+                    connectBluetoothClient(device, endpoint, ssid, password, bssid, port, dynamicAp)
+                }, "LibAuto-WirelessOutbound-${endpoint.label}")
+                workers += worker
+                worker.start()
+            }
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun connectBluetoothClient(
+        device: BluetoothDevice,
+        endpoint: RfcommEndpoint,
+        ssid: String,
+        password: String,
+        bssid: String,
+        port: Int,
+        dynamicAp: Boolean
+    ) {
+        if (!running.get() || bootstrapConnected.get()) {
+            return
+        }
+        val remote = safeRemoteName(device)
+        try {
+            logger(
+                "Wireless outbound RFCOMM trying label=${endpoint.label} uuid=${endpoint.uuid} " +
+                    "secure=${endpoint.secure} remote=$remote"
+            )
+            val socket = if (endpoint.secure) {
+                device.createRfcommSocketToServiceRecord(endpoint.uuid)
+            } else {
+                device.createInsecureRfcommSocketToServiceRecord(endpoint.uuid)
+            }
+            socket.connect()
+            if (!bootstrapConnected.compareAndSet(false, true)) {
+                socket.close()
+                return
+            }
+            clientSocket = socket
+            closeBluetoothServers()
+            update(
+                "bluetooth_connected",
+                "Bluetooth bootstrap connected outbound on ${endpoint.label}: $remote"
+            )
+            handleRfcomm(socket.inputStream, socket.outputStream, ssid, password, bssid, port, dynamicAp)
+        } catch (ex: Exception) {
+            logger("Wireless outbound RFCOMM failed ${endpoint.label} remote=$remote: ${ex.message}")
         }
     }
 
@@ -348,6 +438,10 @@ class WirelessAaController(
         port: Int,
         dynamicAp: Boolean
     ) {
+        update(
+            "bootstrap_sending",
+            "Sending wireless bootstrap: ssid=$ssid ip=${bestLocalIpAddress()} port=$port bssid=$bssid dynamic=$dynamicAp"
+        )
         sendFrame(output, AawBootstrapProtocol.MESSAGE_WIFI_VERSION_REQUEST)
         sendFrame(
             output,
@@ -359,8 +453,10 @@ class WirelessAaController(
         while (running.get()) {
             val read = input.read(chunk)
             if (read < 0) {
+                logger("Wireless RFCOMM input closed")
                 break
             }
+            logger("Wireless received RFCOMM bytes=$read hex=${chunk.copyOf(read).toHex(MAX_HEX_LOG_BYTES)}")
             for (index in 0 until read) {
                 buffer += chunk[index]
             }
@@ -395,7 +491,7 @@ class WirelessAaController(
         val frame = AawBootstrapProtocol.encodeFrame(messageId, payload)
         output.write(frame)
         output.flush()
-        logger("Wireless sent message id=$messageId bytes=${payload.size}")
+        logger("Wireless sent message id=$messageId payloadBytes=${payload.size} frameHex=${frame.toHex(MAX_HEX_LOG_BYTES)}")
     }
 
     private fun closeBluetooth() {
@@ -412,6 +508,16 @@ class WirelessAaController(
         }
         clientSocket = null
         workers.removeAll { !it.isAlive }
+    }
+
+    private fun closeBluetoothServers() {
+        try {
+            synchronized(serverSockets) {
+                serverSockets.forEach { it.close() }
+                serverSockets.clear()
+            }
+        } catch (_: Exception) {
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -460,6 +566,44 @@ class WirelessAaController(
         hotspotReservation = null
     }
 
+    private fun startHotspotClientMonitor() {
+        val worker = Thread({
+            var last = ""
+            while (running.get() && !bootstrapConnected.get()) {
+                val snapshot = readArpSnapshot()
+                if (snapshot.isNotBlank() && snapshot != last) {
+                    last = snapshot
+                    logger("Wireless hotspot neighbour snapshot: $snapshot")
+                }
+                try {
+                    Thread.sleep(HOTSPOT_CLIENT_POLL_MS)
+                } catch (_: InterruptedException) {
+                    return@Thread
+                }
+            }
+        }, "LibAuto-WirelessHotspotClients")
+        workers += worker
+        worker.start()
+    }
+
+    private fun readArpSnapshot(): String {
+        return try {
+            File("/proc/net/arp").readLines()
+                .drop(1)
+                .mapNotNull { line ->
+                    val parts = line.trim().split(Regex("\\s+"))
+                    if (parts.size >= 6 && parts[5].startsWith("wlan", ignoreCase = true)) {
+                        "${parts[0]} ${parts[3]} ${parts[5]}"
+                    } else {
+                        null
+                    }
+                }
+                .joinToString("; ")
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
     private fun update(status: String, details: String) {
         currentSnapshot = Snapshot(status, details)
         logger("Wireless $status: $details")
@@ -502,6 +646,24 @@ class WirelessAaController(
         }
     }
 
+    @SuppressLint("MissingPermission")
+    private fun safeRemoteName(device: BluetoothDevice?): String {
+        if (device == null) {
+            return "phone"
+        }
+        val name = try {
+            device.name
+        } catch (_: Exception) {
+            null
+        }
+        return "${name ?: "phone"} ${device.address ?: ""}".trim()
+    }
+
+    private fun ByteArray.toHex(maxBytes: Int): String {
+        return take(maxBytes).joinToString("") { "%02x".format(Locale.US, it) } +
+            if (size > maxBytes) "...(+${size - maxBytes})" else ""
+    }
+
     private object IntentBuilder {
         fun wirelessStatus(status: String, details: String): android.content.Intent {
             return android.content.Intent(Constants.ACTION_WIRELESS_STATUS).apply {
@@ -532,6 +694,12 @@ class WirelessAaController(
             RfcommEndpoint(UUID.fromString("669a0c20-0008-f4bd-e611-cb52007ae14d"), "openauto-reversed-secure", true),
             RfcommEndpoint(UUID.fromString("669a0c20-0008-f4bd-e611-cb52007ae14d"), "openauto-reversed-insecure", false)
         )
+        val OUTBOUND_WIRELESS_ENDPOINTS: List<RfcommEndpoint> = listOf(
+            RfcommEndpoint(UUID.fromString("4de17a00-52cb-11e6-bdf4-0800200c9a66"), "openauto-out-secure", true),
+            RfcommEndpoint(UUID.fromString("4de17a00-52cb-11e6-bdf4-0800200c9a66"), "openauto-out-insecure", false),
+            RfcommEndpoint(UUID.fromString("4de48490-8ab7-4fd6-970a-0ae4142618e3"), "aa-wireless-out-secure", true),
+            RfcommEndpoint(UUID.fromString("4de48490-8ab7-4fd6-970a-0ae4142618e3"), "aa-wireless-out-insecure", false)
+        )
         val AA_BLE_ENDPOINTS: List<RfcommEndpoint> = listOf(
             RfcommEndpoint(
                 UUID.fromString("4de17a00-52cb-11e6-bdf4-0800200c9a66"),
@@ -541,5 +709,7 @@ class WirelessAaController(
             )
         )
         const val RFCOMM_SERVICE_NAME = "OpenAuto Bluetooth Service"
+        const val MAX_HEX_LOG_BYTES = 128
+        const val HOTSPOT_CLIENT_POLL_MS = 2000L
     }
 }
