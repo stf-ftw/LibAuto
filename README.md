@@ -29,8 +29,9 @@ Known working:
 
 Designed for:
 
-- Android 8.0+ (`minSdk 26`) for the compatibility APK.
-- Android 15 target (`targetSdk 35`) for Google Play-style builds.
+- Android 8.0+ (`minSdk 26`).
+- Android 15 target (`targetSdk 35`) for the standard/Play build.
+- Legacy target (`targetSdk 28`) for sideload-only head-unit builds that reject modern APK metadata.
 - `armeabi-v7a` and `arm64-v8a` devices.
 - Screens around 800x480, 1024x600, 1280x720, 1920x1080, and native-aspect scaled modes.
 
@@ -58,23 +59,23 @@ Requirements:
 
 ## Install
 
-Use the compatibility APK for normal sideloading, especially on questionable Android 8/10/14 hybrid head units:
+Download `LibAuto-standard.apk` first.
+
+If it does not install or crashes immediately on an older/Chinese Android head unit, try `LibAuto-legacy-headunit.apk` instead.
+
+Use the standard APK for normal Android tablets, modern head units, and Play-equivalent testing:
 
 ```bash
-adb install -r LibAuto-compatibility-release-signed.apk
+adb install -r LibAuto-standard.apk
 ```
 
-Use the Play flavor for store-style validation and modern target-SDK requirements:
+Use the legacy head-unit APK only for problematic sideloaded Android head units:
 
 ```bash
-adb install -r LibAuto-play-release-signed.apk
+adb install -r LibAuto-legacy-headunit.apk
 ```
 
-Google Play upload uses the signed AAB:
-
-```text
-LibAuto-play-release-signed.aab
-```
+The Play Store build is the same target-SDK family as `LibAuto-standard.apk`; the legacy APK is not intended for Play upload.
 
 The Android package/application id is:
 
@@ -116,7 +117,14 @@ app/build/outputs/apk/play/release/LibAuto-play-release-unsigned.apk
 app/build/outputs/bundle/playRelease/LibAuto-play-release.aab
 ```
 
-For current Google Play submissions, Google’s [target API requirement](https://developer.android.com/google/play/requirements/target-sdk) is Android 15 / API 35 or higher for new apps and updates, with exceptions for Wear OS, Android Automotive OS, and Android TV. LibAuto’s `play` flavor targets API 35; the `compatibility` flavor targets API 28 for old/forked head-unit firmware behavior.
+Release APKs are renamed for users:
+
+```text
+LibAuto-standard.apk
+LibAuto-legacy-headunit.apk
+```
+
+For current Google Play submissions, Google’s [target API requirement](https://developer.android.com/google/play/requirements/target-sdk) is Android 15 / API 35 or higher for new apps and updates, with exceptions for Wear OS, Android Automotive OS, and Android TV. LibAuto’s standard/play flavor targets API 35; the legacy head-unit flavor targets API 28 for old/forked head-unit firmware behavior.
 
 ## Repository Layout
 
@@ -132,7 +140,7 @@ For current Google Play submissions, Google’s [target API requirement](https:/
 - Wireless Android Auto is not implemented as a standalone dongle bridge.
 - The app depends on Android USB host behavior. Some car head units block or virtualize USB devices in ways third-party apps cannot access.
 - Play Store approval is not guaranteed because projection/head-unit apps may be subject to Google policy review and trademark/product-representation constraints.
-- The compatibility APK intentionally targets an older SDK for sideloaded head-unit compatibility; do not upload that flavor to Google Play.
+- The legacy head-unit APK intentionally targets an older SDK for sideloaded head-unit compatibility; do not upload that flavor to Google Play.
 
 ## Documentation
 

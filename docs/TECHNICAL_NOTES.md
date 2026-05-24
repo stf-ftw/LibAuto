@@ -55,15 +55,15 @@ These keep navigation apps from waiting forever for vehicle data while avoiding 
 ## Build And Release
 
 - Added release flavors:
-- `compatibility`: targetSdk 28 for sideloaded old/forked head-unit firmware.
-- `play`: targetSdk 35 for current Google Play API-level requirements.
+- `play`: targetSdk 35 for current Google Play API-level requirements; released as `LibAuto-standard.apk`.
+- `compatibility`: targetSdk 28 for sideloaded old/forked head-unit firmware; released as `LibAuto-legacy-headunit.apk`.
 - Added API 35 compile support.
 - Fixed the arm64 Android vcpkg triplet so libusb/autotools cross-build receives the correct host triplet.
-- Built and signed release APK/AAB artifacts outside the repository.
+- Built and signed release APK artifacts outside the repository.
 
 ## Known Risks
 
 - Android Auto receiver behavior is not public API and may break with phone-side updates.
 - Some head units expose misleading Android versions or block USB host APIs.
-- The `compatibility` flavor is for sideloading only, not Google Play.
+- The `compatibility`/legacy head-unit flavor is for sideloading only, not Google Play.
 - Native dependency licenses must be reviewed before public binary redistribution.

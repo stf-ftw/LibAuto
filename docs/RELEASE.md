@@ -2,16 +2,16 @@
 
 Current release build:
 
-- Version name: `0.1`
-- Version code: `1`
+- Version name: `0.2`
+- Version code: `2`
 - Application id: `ro.stf_ftw.libauto`
 - Minimum SDK: 26
 - ABIs: `armeabi-v7a`, `arm64-v8a`
 
 ## Flavors
 
-- `compatibility`: targetSdk 28, intended for sideloading on old/forked Android head units.
-- `play`: targetSdk 35, intended for Google Play-style release validation and AAB upload.
+- `play`: targetSdk 35, packaged publicly as `LibAuto-standard.apk`.
+- `compatibility`: targetSdk 28, packaged publicly as `LibAuto-legacy-headunit.apk` for sideloading on old/forked Android head units.
 
 ## Build Command
 
@@ -24,17 +24,15 @@ Current release build:
 Release artifacts should be generated outside the source tree:
 
 ```text
-LibAuto-compatibility-release-signed.apk
-LibAuto-play-release-signed.apk
-LibAuto-play-release-signed.aab
+LibAuto-standard.apk
+LibAuto-legacy-headunit.apk
 ```
 
 Verification reports:
 
 ```text
-LibAuto-compatibility-release-signed.apk.verify.txt
-LibAuto-play-release-signed.apk.verify.txt
-LibAuto-play-release-signed.aab.verify.txt
+LibAuto-standard.apk.verify.txt
+LibAuto-legacy-headunit.apk.verify.txt
 ```
 
 ## Signing
@@ -44,17 +42,12 @@ Do not commit signing keys or generated release artifacts. Use your own upload k
 ## Verify APKs
 
 ```bash
-apksigner verify --verbose --print-certs LibAuto-play-release-signed.apk
-```
-
-## Verify AAB
-
-```bash
-jarsigner -verify -verbose -certs LibAuto-play-release-signed.aab
+apksigner verify --verbose --print-certs LibAuto-standard.apk
 ```
 
 ## Notes
 
-- Use `LibAuto-play-release-signed.aab` for Play upload checks.
-- Use `LibAuto-compatibility-release-signed.apk` for sideload testing on problematic head units.
+- Download `LibAuto-standard.apk` first.
+- If it does not install or crashes immediately on an older/Chinese Android head unit, try `LibAuto-legacy-headunit.apk` instead.
+- Persistent logs are size-capped under `Android/data/ro.stf_ftw.libauto/files/LibAutoLogs/` to avoid unbounded NAND writes.
 - Play Store acceptance is not guaranteed; Android Auto/head-unit apps can be sensitive to policy, certification, and trademark review.

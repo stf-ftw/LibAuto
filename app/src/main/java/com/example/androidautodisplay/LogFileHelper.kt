@@ -9,6 +9,8 @@ import java.util.Locale
 object LogFileHelper {
     private const val MAX_EVENT_LOG_BYTES = 384 * 1024
     private const val TRIM_EVENT_LOG_TO_BYTES = 256 * 1024
+    private const val MAX_NATIVE_LOG_BYTES = 512 * 1024
+    private const val TRIM_NATIVE_LOG_TO_BYTES = 384 * 1024
     private val lock = Any()
 
     fun getLogDir(context: Context): File {
@@ -48,16 +50,26 @@ object LogFileHelper {
             append("\n")
         }
         synchronized(lock) {
-            getEventLogFile(context).appendText(entry)
-            getNativeLogFile(context).appendText(entry)
+            appendBounded(getEventLogFile(context), entry, MAX_EVENT_LOG_BYTES, TRIM_EVENT_LOG_TO_BYTES)
+            appendBounded(getNativeLogFile(context), entry, MAX_NATIVE_LOG_BYTES, TRIM_NATIVE_LOG_TO_BYTES)
         }
     }
 
     private fun trimEventLogIfNeeded(file: File) {
-        if (!file.exists() || file.length() <= MAX_EVENT_LOG_BYTES) {
+        trimLogIfNeeded(file, MAX_EVENT_LOG_BYTES, TRIM_EVENT_LOG_TO_BYTES)
+    }
+
+    private fun appendBounded(file: File, entry: String, maxBytes: Int, trimToBytes: Int) {
+        trimLogIfNeeded(file, maxBytes, trimToBytes)
+        file.appendText(entry)
+        trimLogIfNeeded(file, maxBytes, trimToBytes)
+    }
+
+    private fun trimLogIfNeeded(file: File, maxBytes: Int, trimToBytes: Int) {
+        if (!file.exists() || file.length() <= maxBytes) {
             return
         }
         val bytes = file.readBytes()
-        file.writeBytes(bytes.takeLast(TRIM_EVENT_LOG_TO_BYTES).toByteArray())
+        file.writeBytes(bytes.takeLast(trimToBytes).toByteArray())
     }
 }

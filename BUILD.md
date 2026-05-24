@@ -42,3 +42,8 @@ The unsigned release APKs will be at:
 - `app/build/outputs/apk/play/release/LibAuto-play-release-unsigned.apk`
 
 Use the compatibility flavor for older or forked Android head units. Use the play flavor for modern Android devices and Play-targeted builds.
+
+Public release APK names:
+
+- `LibAuto-standard.apk`: install this first on normal Android devices.
+- `LibAuto-legacy-headunit.apk`: use this only if the standard APK will not install or crashes immediately on an older/Chinese Android head unit.
