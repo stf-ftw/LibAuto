@@ -33,9 +33,9 @@ class WirelessAaController(
     private val mainHandler = Handler(Looper.getMainLooper())
     private val running = AtomicBoolean(false)
     private var hotspotReservation: WifiManager.LocalOnlyHotspotReservation? = null
-    private var serverSocket: BluetoothServerSocket? = null
+    private val serverSockets = mutableListOf<BluetoothServerSocket>()
     private var clientSocket: BluetoothSocket? = null
-    private var worker: Thread? = null
+    private val workers = mutableListOf<Thread>()
     @Volatile private var currentSnapshot = Snapshot("stopped", "Wireless Android Auto stopped")
 
     fun getSnapshot(): Snapshot = currentSnapshot
@@ -51,6 +51,7 @@ class WirelessAaController(
             running.set(false)
             return false
         }
+        update("tcp_listening", "AA TCP listener ready on port $port; starting hotspot")
         startHotspotThenBluetooth(port)
         return true
     }
@@ -75,7 +76,7 @@ class WirelessAaController(
                         val bssid = findWifiMacAddress()
                         update(
                             "hotspot",
-                            "Hotspot ready: $ssid on 2.4/5 GHz device default; waiting for Bluetooth bootstrap"
+                            "Hotspot ready: $ssid / $password, IP ${bestLocalIpAddress()}:$port; waiting for Bluetooth bootstrap"
                         )
                         startBluetoothServer(
                             ssid = ssid,
@@ -127,27 +128,49 @@ class WirelessAaController(
             running.set(false)
             return
         }
-        worker = Thread({
-            try {
-                serverSocket = adapter.listenUsingRfcommWithServiceRecord(
-                    "LibAuto Wireless Android Auto",
-                    AA_WIRELESS_UUID
-                )
-                update("bluetooth_listening", "Bluetooth bootstrap listening; pair/connect from Android Auto")
-                val socket = serverSocket?.accept() ?: return@Thread
-                clientSocket = socket
-                update("bluetooth_connected", "Bluetooth bootstrap connected: ${socket.remoteDevice?.name ?: "phone"}")
-                handleRfcomm(socket.inputStream, socket.outputStream, ssid, password, bssid, port, dynamicAp)
-            } catch (ex: Exception) {
-                if (running.get()) {
-                    LogFileHelper.appendException(appContext, "Wireless Bluetooth bootstrap failed", ex)
-                    update("failed", "Bluetooth bootstrap failed: ${ex.message}")
-                }
-            } finally {
-                closeBluetooth()
+        for ((uuid, label) in AA_WIRELESS_UUIDS) {
+            val worker = Thread({
+                listenForBluetoothClient(adapter, uuid, label, ssid, password, bssid, port, dynamicAp)
+            }, "LibAuto-WirelessBootstrap-$label")
+            workers += worker
+            worker.start()
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun listenForBluetoothClient(
+        adapter: BluetoothAdapter,
+        uuid: UUID,
+        label: String,
+        ssid: String,
+        password: String,
+        bssid: String,
+        port: Int,
+        dynamicAp: Boolean
+    ) {
+        try {
+            val socket = adapter.listenUsingRfcommWithServiceRecord(
+                "LibAuto Wireless Android Auto",
+                uuid
+            )
+            synchronized(serverSockets) {
+                serverSockets += socket
             }
-        }, "LibAuto-WirelessBootstrap")
-        worker?.start()
+            update("bluetooth_listening", "Bluetooth bootstrap listening on $label; pair/connect from Android Auto")
+            val client = socket.accept() ?: return
+            clientSocket = client
+            closeServerSocketsExcept(socket)
+            update(
+                "bluetooth_connected",
+                "Bluetooth bootstrap connected on $label: ${client.remoteDevice?.name ?: "phone"}"
+            )
+            handleRfcomm(client.inputStream, client.outputStream, ssid, password, bssid, port, dynamicAp)
+        } catch (ex: Exception) {
+            if (running.get()) {
+                LogFileHelper.appendException(appContext, "Wireless Bluetooth bootstrap failed ($label)", ex)
+                logger("Wireless Bluetooth bootstrap failed on $label: ${ex.message}")
+            }
+        }
     }
 
     private fun handleRfcomm(
@@ -215,11 +238,27 @@ class WirelessAaController(
         } catch (_: Exception) {
         }
         try {
-            serverSocket?.close()
+            synchronized(serverSockets) {
+                serverSockets.forEach { it.close() }
+                serverSockets.clear()
+            }
         } catch (_: Exception) {
         }
         clientSocket = null
-        serverSocket = null
+        workers.removeAll { !it.isAlive }
+    }
+
+    private fun closeServerSocketsExcept(keep: BluetoothServerSocket) {
+        synchronized(serverSockets) {
+            serverSockets.filter { it !== keep }.forEach {
+                try {
+                    it.close()
+                } catch (_: Exception) {
+                }
+            }
+            serverSockets.clear()
+            serverSockets += keep
+        }
     }
 
     private fun stopHotspot() {
@@ -273,6 +312,14 @@ class WirelessAaController(
     }
 
     private companion object {
-        val AA_WIRELESS_UUID: UUID = UUID.fromString("4de17a00-52cb-11e6-bdf4-0800200c9a66")
+        /*
+            OpenAuto registers 4de17a00-52cb-11e6-bdf4-0800200c9a66, while newer
+            notes often mention 4de48490-8ab7-4fd6-970a-0ae4142618e3. Listening
+            on both tells us which path the phone actually tries.
+         */
+        val AA_WIRELESS_UUIDS: List<Pair<UUID, String>> = listOf(
+            UUID.fromString("4de17a00-52cb-11e6-bdf4-0800200c9a66") to "openauto",
+            UUID.fromString("4de48490-8ab7-4fd6-970a-0ae4142618e3") to "aa-wireless"
+        )
     }
 }

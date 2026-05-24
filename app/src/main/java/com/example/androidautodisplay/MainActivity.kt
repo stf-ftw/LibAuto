@@ -387,6 +387,14 @@ class MainActivity : AppCompatActivity() {
                         status == "wifi_start_response"
                     ) {
                         statusText.text = getString(R.string.status_wifi)
+                        if (projectionContainer.visibility != View.VISIBLE) {
+                            showProjectionScreen()
+                            projectionStatus.visibility = View.VISIBLE
+                            projectionStatus.text = details
+                        }
+                    } else if (projectionContainer.visibility == View.VISIBLE && projectionStarting) {
+                        projectionStatus.visibility = View.VISIBLE
+                        projectionStatus.text = details
                     }
                 }
             }
@@ -1939,9 +1947,7 @@ class MainActivity : AppCompatActivity() {
         pendingWirelessAaStart = false
         projectionStarting = true
         aasdkRunning = false
-        showProjectionScreen()
-        projectionStatus.visibility = View.VISIBLE
-        projectionStatus.text = getString(R.string.projection_connecting)
+        wirelessStatusText.text = getString(R.string.projection_connecting)
         CarSensorBridge.start()
         ContextCompat.startForegroundService(this, Intent(this, ProjectionService::class.java).apply {
             action = Constants.ACTION_WIRELESS_START
