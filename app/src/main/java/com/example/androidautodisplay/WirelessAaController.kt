@@ -128,10 +128,10 @@ class WirelessAaController(
             running.set(false)
             return
         }
-        for ((uuid, label) in AA_WIRELESS_UUIDS) {
+        for (endpoint in AA_WIRELESS_ENDPOINTS) {
             val worker = Thread({
-                listenForBluetoothClient(adapter, uuid, label, ssid, password, bssid, port, dynamicAp)
-            }, "LibAuto-WirelessBootstrap-$label")
+                listenForBluetoothClient(adapter, endpoint, ssid, password, bssid, port, dynamicAp)
+            }, "LibAuto-WirelessBootstrap-${endpoint.label}")
             workers += worker
             worker.start()
         }
@@ -140,8 +140,7 @@ class WirelessAaController(
     @SuppressLint("MissingPermission")
     private fun listenForBluetoothClient(
         adapter: BluetoothAdapter,
-        uuid: UUID,
-        label: String,
+        endpoint: RfcommEndpoint,
         ssid: String,
         password: String,
         bssid: String,
@@ -149,26 +148,36 @@ class WirelessAaController(
         dynamicAp: Boolean
     ) {
         try {
-            val socket = adapter.listenUsingRfcommWithServiceRecord(
-                "LibAuto Wireless Android Auto",
-                uuid
-            )
+            val socket = if (endpoint.secure) {
+                adapter.listenUsingRfcommWithServiceRecord(
+                    "LibAuto Wireless Android Auto",
+                    endpoint.uuid
+                )
+            } else {
+                adapter.listenUsingInsecureRfcommWithServiceRecord(
+                    "LibAuto Wireless Android Auto",
+                    endpoint.uuid
+                )
+            }
             synchronized(serverSockets) {
                 serverSockets += socket
             }
-            update("bluetooth_listening", "Bluetooth bootstrap listening on $label; pair/connect from Android Auto")
+            update(
+                "bluetooth_listening",
+                "Bluetooth bootstrap listening on ${endpoint.label}; pair/connect from Android Auto"
+            )
             val client = socket.accept() ?: return
             clientSocket = client
             closeServerSocketsExcept(socket)
             update(
                 "bluetooth_connected",
-                "Bluetooth bootstrap connected on $label: ${client.remoteDevice?.name ?: "phone"}"
+                "Bluetooth bootstrap connected on ${endpoint.label}: ${client.remoteDevice?.name ?: "phone"}"
             )
             handleRfcomm(client.inputStream, client.outputStream, ssid, password, bssid, port, dynamicAp)
         } catch (ex: Exception) {
             if (running.get()) {
-                LogFileHelper.appendException(appContext, "Wireless Bluetooth bootstrap failed ($label)", ex)
-                logger("Wireless Bluetooth bootstrap failed on $label: ${ex.message}")
+                LogFileHelper.appendException(appContext, "Wireless Bluetooth bootstrap failed (${endpoint.label})", ex)
+                logger("Wireless Bluetooth bootstrap failed on ${endpoint.label}: ${ex.message}")
             }
         }
     }
@@ -312,14 +321,20 @@ class WirelessAaController(
     }
 
     private companion object {
+        data class RfcommEndpoint(val uuid: UUID, val label: String, val secure: Boolean)
+
         /*
             OpenAuto registers 4de17a00-52cb-11e6-bdf4-0800200c9a66, while newer
             notes often mention 4de48490-8ab7-4fd6-970a-0ae4142618e3. Listening
             on both tells us which path the phone actually tries.
          */
-        val AA_WIRELESS_UUIDS: List<Pair<UUID, String>> = listOf(
-            UUID.fromString("4de17a00-52cb-11e6-bdf4-0800200c9a66") to "openauto",
-            UUID.fromString("4de48490-8ab7-4fd6-970a-0ae4142618e3") to "aa-wireless"
+        val AA_WIRELESS_ENDPOINTS: List<RfcommEndpoint> = listOf(
+            RfcommEndpoint(UUID.fromString("4de17a00-52cb-11e6-bdf4-0800200c9a66"), "openauto-secure", true),
+            RfcommEndpoint(UUID.fromString("4de17a00-52cb-11e6-bdf4-0800200c9a66"), "openauto-insecure", false),
+            RfcommEndpoint(UUID.fromString("4de48490-8ab7-4fd6-970a-0ae4142618e3"), "aa-wireless-secure", true),
+            RfcommEndpoint(UUID.fromString("4de48490-8ab7-4fd6-970a-0ae4142618e3"), "aa-wireless-insecure", false),
+            RfcommEndpoint(UUID.fromString("669a0c20-0008-f4bd-e611-cb52007ae14d"), "openauto-reversed-secure", true),
+            RfcommEndpoint(UUID.fromString("669a0c20-0008-f4bd-e611-cb52007ae14d"), "openauto-reversed-insecure", false)
         )
     }
 }
