@@ -182,6 +182,11 @@ object AaProjectionSink : SurfaceHolder.Callback {
                     writeAudioFully(track, chunk)
                 }
             } catch (_: InterruptedException) {
+            } catch (ex: Throwable) {
+                AasdkNative.nativeReportProjectionStats("audio worker stopped: ${ex.javaClass.simpleName}: ${ex.message}")
+                synchronized(lock) {
+                    stopAudioLocked()
+                }
             }
         }
     }
@@ -216,6 +221,11 @@ object AaProjectionSink : SurfaceHolder.Callback {
                     queueVideoBuffer(codec, inputIndex, inputBuffer, frame.data, frame.ptsUs)
                 }
             } catch (_: InterruptedException) {
+            } catch (ex: Throwable) {
+                AasdkNative.nativeReportProjectionStats("video worker stopped: ${ex.javaClass.simpleName}: ${ex.message}")
+                synchronized(lock) {
+                    stopVideoLocked()
+                }
             }
         }
     }

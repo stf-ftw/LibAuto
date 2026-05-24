@@ -118,10 +118,10 @@ class ProjectionService : Service() {
         )
         UsbJniBridge.attach(usbController)
         val initOk = AasdkNative.nativeInit()
-        AasdkNative.nativeSetLogPath("")
+        AasdkNative.nativeSetLogPath(LogFileHelper.getNativeLogFile(this).absolutePath)
         applyProjectionResolutionSetting()
         appendUsbLog("AASDK native init result: $initOk")
-        appendUsbLog("Native file logging disabled")
+        appendUsbLog("Native file logging: ${LogFileHelper.getNativeLogFile(this).absolutePath}")
         registerReceiver(
             usbPermissionReceiver,
             IntentFilter(Constants.USB_PERMISSION)

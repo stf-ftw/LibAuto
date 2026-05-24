@@ -13,6 +13,8 @@ import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.view.Gravity
 import android.view.KeyEvent
@@ -93,6 +95,12 @@ class MainActivity : AppCompatActivity() {
     private var aasdkRunning = false
     private var projectionStarting = false
     private var statusReceiverRegistered = false
+    private var pendingProjectionCloseReason: String? = null
+    private val projectionCloseHandler = Handler(Looper.getMainLooper())
+    private val delayedProjectionClose = Runnable {
+        pendingProjectionCloseReason = null
+        showLauncherScreen()
+    }
     private val wifiMonitor by lazy { WifiMonitor(this) }
     private var transportRunning = false
     private var videoTesting = false
@@ -931,6 +939,7 @@ class MainActivity : AppCompatActivity() {
         }
         pendingSelectedDeviceName = null
         resetProjectionPipeline()
+        cancelPendingProjectionClose()
         projectionStarting = true
         aasdkRunning = false
         showProjectionScreen()
@@ -943,6 +952,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showProjectionScreen() {
+        cancelPendingProjectionClose()
         launcherContainer.visibility = View.GONE
         projectionContainer.visibility = View.VISIBLE
         videoSurface.visibility = View.VISIBLE
@@ -955,6 +965,7 @@ class MainActivity : AppCompatActivity() {
         if (projectionContainer.visibility != View.VISIBLE) {
             return
         }
+        cancelPendingProjectionClose()
         aasdkRunning = false
         projectionStarting = false
         touchActive = false
@@ -975,6 +986,7 @@ class MainActivity : AppCompatActivity() {
         when (state) {
             "STARTING_AA",
             "AA_TLS_HANDSHAKE" -> {
+                cancelPendingProjectionClose()
                 projectionStarting = true
                 aasdkRunning = true
                 showProjectionScreen()
@@ -986,6 +998,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             "AA_SESSION_ACTIVE" -> {
+                cancelPendingProjectionClose()
                 projectionStarting = false
                 aasdkRunning = true
                 showProjectionScreen()
@@ -1002,11 +1015,11 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             "DISCONNECTED" -> {
-                showLauncherScreen()
+                scheduleProjectionClose(state)
             }
             "ERROR" -> {
                 if (!projectionStarting && !aasdkRunning) {
-                    showLauncherScreen()
+                    scheduleProjectionClose(state)
                 } else {
                     projectionStatus.visibility = View.VISIBLE
                     projectionStatus.text = formatUsbState(state)
@@ -1014,10 +1027,27 @@ class MainActivity : AppCompatActivity() {
             }
             "IDLE" -> {
                 if (!projectionStarting && !aasdkRunning) {
-                    showLauncherScreen()
+                    scheduleProjectionClose(state)
                 }
             }
         }
+    }
+
+    private fun scheduleProjectionClose(reason: String) {
+        if (projectionContainer.visibility != View.VISIBLE) {
+            return
+        }
+        if (pendingProjectionCloseReason == reason) {
+            return
+        }
+        pendingProjectionCloseReason = reason
+        projectionCloseHandler.removeCallbacks(delayedProjectionClose)
+        projectionCloseHandler.postDelayed(delayedProjectionClose, 5_000L)
+    }
+
+    private fun cancelPendingProjectionClose() {
+        pendingProjectionCloseReason = null
+        projectionCloseHandler.removeCallbacks(delayedProjectionClose)
     }
 
     private fun resetProjectionPipeline() {
@@ -1504,6 +1534,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun startAaSession() {
         resetProjectionPipeline()
+        cancelPendingProjectionClose()
         projectionStarting = true
         aasdkRunning = false
         showProjectionScreen()
