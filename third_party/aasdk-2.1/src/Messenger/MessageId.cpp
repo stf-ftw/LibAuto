@@ -18,6 +18,7 @@
 
 #include <iomanip>
 #include <boost/endian/conversion.hpp>
+#include <cstring>
 #include <f1x/aasdk/Messenger/MessageId.hpp>
 
 namespace f1x
@@ -34,7 +35,12 @@ MessageId::MessageId(uint16_t id):
 }
 MessageId::MessageId(const common::Data& data)
 {
-    id_ = boost::endian::big_to_native(reinterpret_cast<const uint16_t&>(data[0]));
+    uint16_t idBig = 0;
+    if(data.size() >= sizeof(idBig))
+    {
+        std::memcpy(&idBig, data.data(), sizeof(idBig));
+    }
+    id_ = boost::endian::big_to_native(idBig);
 }
 
 uint16_t MessageId::getId() const
@@ -44,7 +50,7 @@ uint16_t MessageId::getId() const
 
 common::Data MessageId::getData() const
 {
-    const MessageId messageIdBig = boost::endian::native_to_big(id_);
+    const uint16_t messageIdBig = boost::endian::native_to_big(id_);
     const common::DataConstBuffer messageIdBigBuffer(&messageIdBig, sizeof(messageIdBig));
     return common::createData(messageIdBigBuffer);
 }

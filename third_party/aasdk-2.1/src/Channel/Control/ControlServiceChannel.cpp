@@ -17,6 +17,7 @@
 */
 
 #include <boost/endian/conversion.hpp>
+#include <cstring>
 #include <aasdk_proto/ControlMessageIdsEnum.pb.h>
 #include <f1x/aasdk/Version.hpp>
 #include <f1x/aasdk/IO/PromiseLink.hpp>
@@ -45,8 +46,10 @@ void ControlServiceChannel::sendVersionRequest(SendPromise::Pointer promise)
     message->insertPayload(messenger::MessageId(proto::ids::ControlMessage::VERSION_REQUEST).getData());
 
     common::Data versionBuffer(4, 0);
-    reinterpret_cast<uint16_t&>(versionBuffer[0]) = boost::endian::native_to_big(AASDK_MAJOR);
-    reinterpret_cast<uint16_t&>(versionBuffer[2]) = boost::endian::native_to_big(AASDK_MINOR);
+    const uint16_t majorBig = boost::endian::native_to_big(AASDK_MAJOR);
+    const uint16_t minorBig = boost::endian::native_to_big(AASDK_MINOR);
+    std::memcpy(versionBuffer.data(), &majorBig, sizeof(majorBig));
+    std::memcpy(versionBuffer.data() + 2, &minorBig, sizeof(minorBig));
     message->insertPayload(versionBuffer);
 
     this->send(std::move(message), std::move(promise));
@@ -174,11 +177,17 @@ void ControlServiceChannel::messageHandler(messenger::Message::Pointer message, 
 void ControlServiceChannel::handleVersionResponse(const common::DataConstBuffer& payload, IControlServiceChannelEventHandler::Pointer eventHandler)
 {
     const size_t elements = payload.size / sizeof(uint16_t);
-    const uint16_t* versionResponse = reinterpret_cast<const uint16_t*>(payload.cdata);
+    auto read16 = [&payload](size_t index) -> uint16_t {
+        uint16_t valueBig = 0;
+        std::memcpy(&valueBig, payload.cdata + (index * sizeof(valueBig)), sizeof(valueBig));
+        return boost::endian::big_to_native(valueBig);
+    };
 
-    uint16_t majorCode = elements > 0 ? boost::endian::big_to_native(versionResponse[0]) : 0;
-    uint16_t minorCode = elements > 1 ? boost::endian::big_to_native(versionResponse[1]) : 0;
-    proto::enums::VersionResponseStatus::Enum status = elements > 2 ? static_cast<proto::enums::VersionResponseStatus::Enum>(versionResponse[2]) : proto::enums::VersionResponseStatus::MISMATCH;
+    uint16_t majorCode = elements > 0 ? read16(0) : 0;
+    uint16_t minorCode = elements > 1 ? read16(1) : 0;
+    proto::enums::VersionResponseStatus::Enum status = elements > 2
+        ? static_cast<proto::enums::VersionResponseStatus::Enum>(read16(2))
+        : proto::enums::VersionResponseStatus::MISMATCH;
 
     eventHandler->onVersionResponse(majorCode, minorCode, status);
 }

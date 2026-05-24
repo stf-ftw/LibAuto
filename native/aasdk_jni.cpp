@@ -7,6 +7,7 @@
 #include <cmath>
 #include <csignal>
 #include <cstring>
+#include <dlfcn.h>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -264,6 +265,12 @@ void stopVideoSink() {
 
 void pushVideoFrame(const common::DataConstBuffer& payload, int64_t pts_us) {
     const auto count = g_video_frame_count.fetch_add(1) + 1;
+    if (payload.cdata == nullptr || payload.size == 0) {
+        native_log::Logf(LOG_TAG, "W",
+                         "AA video frame skipped empty count=%llu",
+                         static_cast<unsigned long long>(count));
+        return;
+    }
     if (count <= 4 || count % 200 == 0) {
         native_log::Logf(LOG_TAG, "I",
                          "AA video frame bytes=%zu pts=%lld count=%llu",
@@ -275,16 +282,31 @@ void pushVideoFrame(const common::DataConstBuffer& payload, int64_t pts_us) {
     if (holder.env == nullptr || !ensureProjectionSink(holder.env)) {
         return;
     }
+    std::vector<jbyte> copy(payload.size);
+    std::memcpy(copy.data(), payload.cdata, payload.size);
     jbyteArray arr = holder.env->NewByteArray(static_cast<jsize>(payload.size));
+    if (arr == nullptr) {
+        native_log::Log(LOG_TAG, "E", "AA video frame NewByteArray failed");
+        native_log::LogJniException(holder.env, "nativePushVideo NewByteArray");
+        if (holder.attached) {
+            g_vm->DetachCurrentThread();
+        }
+        return;
+    }
     holder.env->SetByteArrayRegion(
         arr,
         0,
         static_cast<jsize>(payload.size),
-        reinterpret_cast<const jbyte*>(payload.cdata)
+        copy.data()
     );
     holder.env->CallStaticVoidMethod(g_projection_sink_class, g_push_video, arr, static_cast<jlong>(pts_us));
     holder.env->DeleteLocalRef(arr);
     native_log::LogJniException(holder.env, "nativePushVideo");
+    if (count <= 4 || count % 200 == 0) {
+        native_log::Logf(LOG_TAG, "I",
+                         "AA video frame delivered count=%llu",
+                         static_cast<unsigned long long>(count));
+    }
     if (holder.attached) {
         g_vm->DetachCurrentThread();
     }
@@ -419,7 +441,20 @@ void crashHandler(int sig) {
     };
     _Unwind_Backtrace(cb, &state);
     for (size_t i = 0; i < state.count; ++i) {
-        native_log::Logf(LOG_TAG, "E", "  #%zu pc=%p", i, state.pcs[i]);
+        Dl_info info {};
+        if (dladdr(state.pcs[i], &info) != 0 && info.dli_fname != nullptr) {
+            const auto offset = reinterpret_cast<uintptr_t>(state.pcs[i]) -
+                reinterpret_cast<uintptr_t>(info.dli_fbase);
+            native_log::Logf(LOG_TAG, "E",
+                             "  #%zu pc=%p off=0x%zx obj=%s sym=%s",
+                             i,
+                             state.pcs[i],
+                             static_cast<size_t>(offset),
+                             info.dli_fname,
+                             info.dli_sname != nullptr ? info.dli_sname : "?");
+        } else {
+            native_log::Logf(LOG_TAG, "E", "  #%zu pc=%p", i, state.pcs[i]);
+        }
     }
     _Exit(128 + sig);
 }

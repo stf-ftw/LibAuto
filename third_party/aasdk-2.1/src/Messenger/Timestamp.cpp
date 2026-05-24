@@ -17,6 +17,7 @@
 */
 
 #include <boost/endian/conversion.hpp>
+#include <cstring>
 #include <f1x/aasdk/Messenger/Timestamp.hpp>
 
 namespace f1x
@@ -34,7 +35,11 @@ Timestamp::Timestamp(ValueType stamp)
 
 Timestamp::Timestamp(const common::DataConstBuffer& buffer)
 {
-    const ValueType& timestampBig = reinterpret_cast<const ValueType&>(buffer.cdata[0]);
+    ValueType timestampBig = 0;
+    if(buffer.size >= sizeof(timestampBig))
+    {
+        std::memcpy(&timestampBig, buffer.cdata, sizeof(timestampBig));
+    }
     stamp_ = boost::endian::big_to_native(timestampBig);
 }
 

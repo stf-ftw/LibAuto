@@ -17,6 +17,7 @@
 */
 
 #include <boost/endian/conversion.hpp>
+#include <cstring>
 #include <f1x/aasdk/Messenger/FrameSize.hpp>
 
 namespace f1x
@@ -43,17 +44,24 @@ FrameSize::FrameSize(size_t frameSize)
 }
 
 FrameSize::FrameSize(const common::DataConstBuffer& buffer)
+    : frameSizeType_(FrameSizeType::SHORT)
+    , frameSize_(0)
+    , totalSize_(0)
 {
     if(buffer.size >= 2)
     {
         frameSizeType_ = FrameSizeType::SHORT;
-        frameSize_ = boost::endian::big_to_native(reinterpret_cast<const uint16_t&>(buffer.cdata[0]));
+        uint16_t frameSizeBig = 0;
+        std::memcpy(&frameSizeBig, buffer.cdata, sizeof(frameSizeBig));
+        frameSize_ = boost::endian::big_to_native(frameSizeBig);
     }
 
     if(buffer.size >= 6)
     {
         frameSizeType_ = FrameSizeType::EXTENDED;
-        totalSize_ = boost::endian::big_to_native(reinterpret_cast<const uint32_t&>(buffer.cdata[2]));
+        uint32_t totalSizeBig = 0;
+        std::memcpy(&totalSizeBig, buffer.cdata + 2, sizeof(totalSizeBig));
+        totalSize_ = boost::endian::big_to_native(totalSizeBig);
     }
 }
 
