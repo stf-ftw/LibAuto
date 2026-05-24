@@ -28,6 +28,10 @@
 #include <aasdk_proto/AVMediaAckIndicationMessage.pb.h>
 #include <aasdk_proto/AVStreamTypeEnum.pb.h>
 #include <aasdk_proto/BindingResponseMessage.pb.h>
+#include <aasdk_proto/BluetoothChannelData.pb.h>
+#include <aasdk_proto/BluetoothPairingMethodEnum.pb.h>
+#include <aasdk_proto/BluetoothPairingResponseMessage.pb.h>
+#include <aasdk_proto/BluetoothPairingStatusEnum.pb.h>
 #include <aasdk_proto/DrivingStatusEnum.pb.h>
 #include <aasdk_proto/GearEnum.pb.h>
 #include <aasdk_proto/ChannelDescriptorData.pb.h>
@@ -54,6 +58,8 @@
 #include <f1x/aasdk/Channel/AV/SystemAudioServiceChannel.hpp>
 #include <f1x/aasdk/Channel/AV/IVideoServiceChannelEventHandler.hpp>
 #include <f1x/aasdk/Channel/AV/VideoServiceChannel.hpp>
+#include <f1x/aasdk/Channel/Bluetooth/BluetoothServiceChannel.hpp>
+#include <f1x/aasdk/Channel/Bluetooth/IBluetoothServiceChannelEventHandler.hpp>
 #include <f1x/aasdk/Channel/Control/ControlServiceChannel.hpp>
 #include <f1x/aasdk/Channel/Control/IControlServiceChannelEventHandler.hpp>
 #include <f1x/aasdk/Channel/Input/IInputServiceChannelEventHandler.hpp>
@@ -132,6 +138,9 @@ jmethodID g_push_audio = nullptr;
 jclass g_mic_bridge_class = nullptr;
 jmethodID g_start_mic = nullptr;
 jmethodID g_stop_mic = nullptr;
+jclass g_bluetooth_bridge_class = nullptr;
+jmethodID g_get_bluetooth_adapter_address = nullptr;
+jmethodID g_is_phone_paired = nullptr;
 std::mutex g_jni_mutex;
 std::atomic<bool> g_microphone_permission_granted{false};
 std::atomic<bool> g_car_speed_sensor_started{false};
@@ -233,8 +242,32 @@ bool ensureMicInputBridge(JNIEnv* env) {
     return g_start_mic != nullptr && g_stop_mic != nullptr;
 }
 
+bool ensureBluetoothBridge(JNIEnv* env) {
+    if (g_bluetooth_bridge_class != nullptr) {
+        return true;
+    }
+    jclass local = env->FindClass("com/example/androidautodisplay/BluetoothBridge");
+    if (local == nullptr) {
+        native_log::Log(LOG_TAG, "W", "BluetoothBridge class not found");
+        return false;
+    }
+    g_bluetooth_bridge_class = reinterpret_cast<jclass>(env->NewGlobalRef(local));
+    env->DeleteLocalRef(local);
+    g_get_bluetooth_adapter_address = env->GetStaticMethodID(
+        g_bluetooth_bridge_class,
+        "nativeGetAdapterAddress",
+        "()Ljava/lang/String;"
+    );
+    g_is_phone_paired = env->GetStaticMethodID(
+        g_bluetooth_bridge_class,
+        "nativeIsPhonePaired",
+        "(Ljava/lang/String;)Z"
+    );
+    return g_get_bluetooth_adapter_address != nullptr && g_is_phone_paired != nullptr;
+}
+
 bool warmJvmBindings(JNIEnv* env) {
-    return ensureProjectionSink(env) && ensureMicInputBridge(env);
+    return ensureProjectionSink(env) && ensureMicInputBridge(env) && ensureBluetoothBridge(env);
 }
 
 void configureVideoSink(int width, int height) {
@@ -368,6 +401,58 @@ void stopMicInput() {
     if (holder.attached) {
         g_vm->DetachCurrentThread();
     }
+}
+
+std::string getBluetoothAdapterAddress() {
+    std::lock_guard<std::mutex> lock(g_jni_mutex);
+    auto holder = getEnv();
+    if (holder.env == nullptr || !ensureBluetoothBridge(holder.env)) {
+        return "";
+    }
+    auto value = static_cast<jstring>(
+        holder.env->CallStaticObjectMethod(g_bluetooth_bridge_class, g_get_bluetooth_adapter_address)
+    );
+    native_log::LogJniException(holder.env, "BluetoothBridge.nativeGetAdapterAddress");
+    std::string address;
+    if (value != nullptr) {
+        const char* raw = holder.env->GetStringUTFChars(value, nullptr);
+        if (raw != nullptr) {
+            address = raw;
+            holder.env->ReleaseStringUTFChars(value, raw);
+        }
+        holder.env->DeleteLocalRef(value);
+    }
+    if (holder.attached) {
+        g_vm->DetachCurrentThread();
+    }
+    return address;
+}
+
+bool isPhoneBluetoothPaired(const std::string& phone_address) {
+    std::lock_guard<std::mutex> lock(g_jni_mutex);
+    auto holder = getEnv();
+    if (holder.env == nullptr || !ensureBluetoothBridge(holder.env)) {
+        return false;
+    }
+    jstring value = holder.env->NewStringUTF(phone_address.c_str());
+    if (value == nullptr) {
+        native_log::LogJniException(holder.env, "BluetoothBridge.phoneAddress");
+        if (holder.attached) {
+            g_vm->DetachCurrentThread();
+        }
+        return false;
+    }
+    const jboolean paired = holder.env->CallStaticBooleanMethod(
+        g_bluetooth_bridge_class,
+        g_is_phone_paired,
+        value
+    );
+    holder.env->DeleteLocalRef(value);
+    native_log::LogJniException(holder.env, "BluetoothBridge.nativeIsPhonePaired");
+    if (holder.attached) {
+        g_vm->DetachCurrentThread();
+    }
+    return paired == JNI_TRUE;
 }
 
 void pushAudioFrame(const common::DataConstBuffer& payload, int64_t pts_us) {
@@ -519,6 +604,7 @@ struct AaSession {
     std::shared_ptr<channel::av::AVInputServiceChannel> av_input;
     std::shared_ptr<channel::input::InputServiceChannel> input;
     std::shared_ptr<channel::sensor::SensorServiceChannel> sensor;
+    std::shared_ptr<channel::bluetooth::BluetoothServiceChannel> bluetooth;
     std::shared_ptr<channel::control::IControlServiceChannelEventHandler> control_handler;
     std::shared_ptr<channel::av::IVideoServiceChannelEventHandler> video_handler;
     std::shared_ptr<channel::av::IAudioServiceChannelEventHandler> media_audio_handler;
@@ -527,6 +613,7 @@ struct AaSession {
     std::shared_ptr<channel::av::IAVInputServiceChannelEventHandler> av_input_handler;
     std::shared_ptr<channel::input::IInputServiceChannelEventHandler> input_handler;
     std::shared_ptr<channel::sensor::ISensorServiceChannelEventHandler> sensor_handler;
+    std::shared_ptr<channel::bluetooth::IBluetoothServiceChannelEventHandler> bluetooth_handler;
 
     AaSession() : strand(io) {}
 };
@@ -1395,6 +1482,74 @@ private:
     bool channel_failed_ = false;
 };
 
+class AndroidBluetoothHandler
+    : public channel::bluetooth::IBluetoothServiceChannelEventHandler,
+      public std::enable_shared_from_this<AndroidBluetoothHandler> {
+public:
+    AndroidBluetoothHandler(
+        std::weak_ptr<channel::bluetooth::BluetoothServiceChannel> channel,
+        boost::asio::io_service::strand& strand)
+        : channel_(std::move(channel)), strand_(strand) {}
+
+    void onChannelOpenRequest(const proto::messages::ChannelOpenRequest& request) override {
+        native_log::Logf(LOG_TAG, "I",
+                         "AA bluetooth open request priority=%d channel=%d",
+                         request.priority(), request.channel_id());
+        if (auto channel = channel_.lock()) {
+            auto promise = channel::SendPromise::defer(strand_);
+            promise->then(
+                [self = shared_from_this()]() { self->receiveAgain(); },
+                [self = shared_from_this()](const error::Error& e) { self->onChannelError(e); }
+            );
+            channel->sendChannelOpenResponse(okChannelOpenResponse(), std::move(promise));
+        }
+    }
+
+    void onBluetoothPairingRequest(const proto::messages::BluetoothPairingRequest& request) override {
+        const auto paired = isPhoneBluetoothPaired(request.phone_address());
+        native_log::Logf(LOG_TAG, "I",
+                         "AA bluetooth pairing request phone=%s method=%d paired=%d",
+                         request.phone_address().c_str(),
+                         request.pairing_method(),
+                         paired ? 1 : 0);
+        proto::messages::BluetoothPairingResponse response;
+        response.set_already_paired(paired);
+        response.set_status(
+            paired ? proto::enums::BluetoothPairingStatus::OK :
+                proto::enums::BluetoothPairingStatus::FAIL
+        );
+        if (auto channel = channel_.lock()) {
+            auto promise = channel::SendPromise::defer(strand_);
+            promise->then(
+                [self = shared_from_this()]() { self->receiveAgain(); },
+                [self = shared_from_this()](const error::Error& e) { self->onChannelError(e); }
+            );
+            channel->sendBluetoothPairingResponse(response, std::move(promise));
+        }
+    }
+
+    void onChannelError(const error::Error& e) override {
+        if (channel_failed_) {
+            return;
+        }
+        channel_failed_ = true;
+        native_log::Logf(LOG_TAG, "E",
+                         "AA bluetooth channel error code=%d native=%u",
+                         static_cast<int>(e.getCode()), e.getNativeCode());
+    }
+
+    void receiveAgain() {
+        if (auto channel = channel_.lock()) {
+            channel->receive(shared_from_this());
+        }
+    }
+
+private:
+    std::weak_ptr<channel::bluetooth::BluetoothServiceChannel> channel_;
+    boost::asio::io_service::strand& strand_;
+    bool channel_failed_ = false;
+};
+
 class AndroidControlHandler
     : public channel::control::IControlServiceChannelEventHandler,
       public std::enable_shared_from_this<AndroidControlHandler> {
@@ -1408,6 +1563,7 @@ public:
         std::weak_ptr<channel::av::AVInputServiceChannel> av_input,
         std::weak_ptr<channel::input::InputServiceChannel> input,
         std::weak_ptr<channel::sensor::SensorServiceChannel> sensor,
+        std::weak_ptr<channel::bluetooth::BluetoothServiceChannel> bluetooth,
         std::shared_ptr<messenger::Cryptor> cryptor,
         boost::asio::io_service::strand& strand)
         : control_(std::move(control)),
@@ -1418,6 +1574,7 @@ public:
           av_input_(std::move(av_input)),
           input_(std::move(input)),
           sensor_(std::move(sensor)),
+          bluetooth_(std::move(bluetooth)),
           cryptor_(std::move(cryptor)),
           strand_(strand) {}
 
@@ -1665,6 +1822,19 @@ private:
         sensor_channel->add_sensors()->set_type(proto::enums::SensorType_Enum_PARKING_BRAKE);
         sensor_channel->add_sensors()->set_type(proto::enums::SensorType_Enum_GEAR);
 
+        const auto bluetoothAddress = getBluetoothAdapterAddress();
+        if (!bluetoothAddress.empty() && bluetooth_.lock() != nullptr) {
+            auto* bluetooth_descriptor = response.add_channels();
+            bluetooth_descriptor->set_channel_id(static_cast<uint32_t>(messenger::ChannelId::BLUETOOTH));
+            auto* bluetooth_channel = bluetooth_descriptor->mutable_bluetooth_channel();
+            bluetooth_channel->set_adapter_address(bluetoothAddress);
+            bluetooth_channel->add_supported_pairing_methods(proto::enums::BluetoothPairingMethod::HFP);
+            bluetooth_channel->add_supported_pairing_methods(proto::enums::BluetoothPairingMethod::A2DP);
+            native_log::Logf(LOG_TAG, "I", "AA bluetooth adapter advertised %s", bluetoothAddress.c_str());
+        } else {
+            native_log::Log(LOG_TAG, "I", "AA bluetooth adapter not advertised");
+        }
+
         response.set_head_unit_name("LibAuto");
         response.set_car_model("LibAuto");
         response.set_car_year("2018");
@@ -1730,6 +1900,7 @@ private:
     std::weak_ptr<channel::av::AVInputServiceChannel> av_input_;
     std::weak_ptr<channel::input::InputServiceChannel> input_;
     std::weak_ptr<channel::sensor::SensorServiceChannel> sensor_;
+    std::weak_ptr<channel::bluetooth::BluetoothServiceChannel> bluetooth_;
     std::shared_ptr<messenger::Cryptor> cryptor_;
     boost::asio::io_service::strand& strand_;
     bool handshake_started_ = false;
@@ -1775,6 +1946,8 @@ bool startAaSession() {
         session->strand, session->messenger);
     session->sensor = std::make_shared<channel::sensor::SensorServiceChannel>(
         session->strand, session->messenger);
+    session->bluetooth = std::make_shared<channel::bluetooth::BluetoothServiceChannel>(
+        session->strand, session->messenger);
 
     session->video_handler = std::make_shared<AndroidVideoHandler>(session->video, session->strand);
     session->media_audio_handler = std::make_shared<AndroidAudioHandler>(
@@ -1787,6 +1960,8 @@ bool startAaSession() {
         session->av_input, session->strand);
     session->input_handler = std::make_shared<AndroidInputHandler>(session->input, session->strand);
     session->sensor_handler = std::make_shared<AndroidSensorHandler>(session->sensor, session->strand);
+    session->bluetooth_handler = std::make_shared<AndroidBluetoothHandler>(
+        session->bluetooth, session->strand);
     session->control_handler = std::make_shared<AndroidControlHandler>(
         session->control,
         session->video,
@@ -1796,6 +1971,7 @@ bool startAaSession() {
         session->av_input,
         session->input,
         session->sensor,
+        session->bluetooth,
         session->cryptor,
         session->strand
     );
@@ -1807,6 +1983,7 @@ bool startAaSession() {
     session->av_input->receive(session->av_input_handler);
     session->input->receive(session->input_handler);
     session->sensor->receive(session->sensor_handler);
+    session->bluetooth->receive(session->bluetooth_handler);
     session->control->receive(session->control_handler);
     session->io_thread = std::thread([session]() {
         session->io.run();

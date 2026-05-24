@@ -44,6 +44,12 @@ class MainActivity : AppCompatActivity() {
         val radioId: Int
     )
 
+    private data class MediaKeyAction(
+        val key: String,
+        val titleRes: Int,
+        val aaScanCode: Int
+    )
+
     private lateinit var launcherContainer: View
     private lateinit var projectionContainer: View
     private lateinit var projectionStatus: TextView
@@ -51,6 +57,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var projectionResolutionGroup: RadioGroup
     private lateinit var projectionNativeAspectCheckbox: CheckBox
     private lateinit var autoConnectCheckbox: CheckBox
+    private lateinit var mediaKeySettingsButton: Button
+    private lateinit var mediaKeyMappingSummary: TextView
+    private lateinit var mediaKeySettingsOverlay: View
+    private lateinit var mediaKeySettingsList: LinearLayout
+    private lateinit var mediaKeyLearningStatus: TextView
+    private lateinit var mediaKeySettingsClose: Button
+    private lateinit var mediaKeyClearAll: Button
     private lateinit var statusText: TextView
     private lateinit var deviceIpText: TextView
     private lateinit var wifiSsidText: TextView
@@ -108,6 +121,7 @@ class MainActivity : AppCompatActivity() {
     private var audioTesting = false
     private var pendingAaStartAfterMicPermission = false
     private var pendingAaStartAfterLocationPermission = false
+    private var pendingAaStartAfterBluetoothPermission = false
     private var pendingSelectedDeviceName: String? = null
     private var autoConnectAttemptedDeviceName: String? = null
     private var projectionVideoWidth = 1280
@@ -117,6 +131,9 @@ class MainActivity : AppCompatActivity() {
     private var projectionMarginWidth = 0
     private var projectionMarginHeight = 0
     private var mediaSession: MediaSession? = null
+    private var learningMediaKeyAction: MediaKeyAction? = null
+    private var learningMediaKeyDownSignature: String? = null
+    private var mediaKeyStatusOverride: String? = null
     private var touchActive = false
     private var lastTouchMoveMs = 0L
     private var lastTouchX = -1
@@ -129,11 +146,26 @@ class MainActivity : AppCompatActivity() {
     private val prefs by lazy { getSharedPreferences("transport_prefs", MODE_PRIVATE) }
     private val aoapPrefs by lazy { getSharedPreferences(Constants.AOAP_PREFS, MODE_PRIVATE) }
     private val projectionPrefs by lazy { getSharedPreferences(Constants.PROJECTION_PREFS, MODE_PRIVATE) }
+    private val mediaKeyPrefs by lazy { getSharedPreferences("media_key_mappings", MODE_PRIVATE) }
     private val projectionResolutions by lazy {
         listOf(
             ProjectionResolution(Constants.PROJECTION_RESOLUTION_480P, R.id.projection_resolution_480p),
             ProjectionResolution(Constants.PROJECTION_RESOLUTION_720P, R.id.projection_resolution_720p),
             ProjectionResolution(Constants.PROJECTION_RESOLUTION_1080P, R.id.projection_resolution_1080p)
+        )
+    }
+    private val mediaKeyActions by lazy {
+        listOf(
+            MediaKeyAction("previous", R.string.media_key_previous, AA_KEYCODE_MEDIA_PREVIOUS),
+            MediaKeyAction("next", R.string.media_key_next, AA_KEYCODE_MEDIA_NEXT),
+            MediaKeyAction("play_pause", R.string.media_key_play_pause, AA_KEYCODE_MEDIA_PLAY_PAUSE),
+            MediaKeyAction("play", R.string.media_key_play, AA_KEYCODE_MEDIA_PLAY),
+            MediaKeyAction("pause", R.string.media_key_pause, AA_KEYCODE_MEDIA_PAUSE),
+            MediaKeyAction("stop", R.string.media_key_stop, AA_KEYCODE_MEDIA_STOP),
+            MediaKeyAction("rewind", R.string.media_key_rewind, AA_KEYCODE_MEDIA_REWIND),
+            MediaKeyAction("fast_forward", R.string.media_key_fast_forward, AA_KEYCODE_MEDIA_FAST_FORWARD),
+            MediaKeyAction("call", R.string.media_key_call, AA_KEYCODE_CALL),
+            MediaKeyAction("end_call", R.string.media_key_end_call, AA_KEYCODE_ENDCALL)
         )
     }
     private lateinit var videoSink: VideoSink
@@ -145,7 +177,7 @@ class MainActivity : AppCompatActivity() {
         if (granted && pendingSelectedDeviceName != null) {
             continueSelectedDeviceStart()
         } else if (granted && pendingAaStartAfterMicPermission) {
-            if (ensureLocationPermissionForAaStart()) {
+            if (ensureLocationPermissionForAaStart() && ensureBluetoothPermissionForAaStart()) {
                 startAaSession()
             }
         } else if (granted) {
@@ -159,6 +191,27 @@ class MainActivity : AppCompatActivity() {
         }
         pendingAaStartAfterMicPermission = false
     }
+
+    private val bluetoothPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) {
+            android.widget.Toast.makeText(
+                this,
+                "Bluetooth permission is needed for Android Auto call pairing",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
+        }
+        if (pendingAaStartAfterBluetoothPermission) {
+            if (pendingSelectedDeviceName != null) {
+                continueSelectedDeviceStart()
+            } else {
+                startAaSession()
+            }
+        }
+        pendingAaStartAfterBluetoothPermission = false
+    }
+
     private val locationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { grants ->
@@ -174,7 +227,7 @@ class MainActivity : AppCompatActivity() {
         if (pendingAaStartAfterLocationPermission) {
             if (pendingSelectedDeviceName != null) {
                 continueSelectedDeviceStart()
-            } else {
+            } else if (ensureBluetoothPermissionForAaStart()) {
                 startAaSession()
             }
         }
@@ -320,6 +373,13 @@ class MainActivity : AppCompatActivity() {
         projectionResolutionGroup = findViewById(R.id.projection_resolution_group)
         projectionNativeAspectCheckbox = findViewById(R.id.projection_native_aspect_checkbox)
         autoConnectCheckbox = findViewById(R.id.autoconnect_checkbox)
+        mediaKeySettingsButton = findViewById(R.id.media_key_settings_button)
+        mediaKeyMappingSummary = findViewById(R.id.media_key_mapping_summary)
+        mediaKeySettingsOverlay = findViewById(R.id.media_key_settings_overlay)
+        mediaKeySettingsList = findViewById(R.id.media_key_settings_list)
+        mediaKeyLearningStatus = findViewById(R.id.media_key_learning_status)
+        mediaKeySettingsClose = findViewById(R.id.media_key_settings_close)
+        mediaKeyClearAll = findViewById(R.id.media_key_clear_all)
         statusText = findViewById(R.id.status_text)
         deviceIpText = findViewById(R.id.device_ip_text)
         wifiSsidText = findViewById(R.id.wifi_ssid_text)
@@ -367,8 +427,10 @@ class MainActivity : AppCompatActivity() {
         configureProjectionResolutionPicker()
         configureAutoConnect()
         configureBackButtonHandling()
+        configureMediaKeySettings()
         configureMediaSession()
         MicInputBridge.initialize(this)
+        BluetoothBridge.initialize(this)
         CarSensorBridge.initialize(this)
         AasdkNative.nativeWarmJvmBindings()
         forwardUsbAttachIntent(intent)
@@ -460,7 +522,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         usbStartAaButton.setOnClickListener {
-            if (ensureMicrophonePermissionForAaStart() && ensureLocationPermissionForAaStart()) {
+            if (ensureMicrophonePermissionForAaStart() &&
+                ensureLocationPermissionForAaStart() &&
+                ensureBluetoothPermissionForAaStart()
+            ) {
                 startAaSession()
             }
         }
@@ -923,7 +988,10 @@ class MainActivity : AppCompatActivity() {
     private fun startSelectedDeviceFlow(deviceName: String) {
         pendingSelectedDeviceName = deviceName
         LogFileHelper.appendEvent(this, "MainActivity", "startSelectedDeviceFlow device=$deviceName")
-        if (ensureMicrophonePermissionForAaStart() && ensureLocationPermissionForAaStart()) {
+        if (ensureMicrophonePermissionForAaStart() &&
+            ensureLocationPermissionForAaStart() &&
+            ensureBluetoothPermissionForAaStart()
+        ) {
             continueSelectedDeviceStart()
         }
     }
@@ -936,6 +1004,9 @@ class MainActivity : AppCompatActivity() {
         }
         if (!CarSensorBridge.hasLocationPermission(this)) {
             ensureLocationPermissionForAaStart()
+            return
+        }
+        if (!ensureBluetoothPermissionForAaStart()) {
             return
         }
         pendingSelectedDeviceName = null
@@ -1095,7 +1166,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        val scanCode = aaButtonCodeForKeyEvent(event.keyCode)
+        handleMediaKeyLearningEvent(event)?.let { return it }
+        val scanCode = aaButtonCodeForKeyEvent(event)
         if (scanCode != null && projectionContainer.visibility == View.VISIBLE) {
             if (sendAaButtonKeyEvent(scanCode, event)) {
                 return true
@@ -1107,6 +1179,10 @@ class MainActivity : AppCompatActivity() {
     private fun configureBackButtonHandling() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                if (mediaKeySettingsOverlay.visibility == View.VISIBLE) {
+                    hideMediaKeySettings()
+                    return
+                }
                 if (projectionContainer.visibility == View.VISIBLE) {
                     sendAaButtonClick(AA_KEYCODE_BACK)
                     return
@@ -1115,6 +1191,236 @@ class MainActivity : AppCompatActivity() {
                 onBackPressedDispatcher.onBackPressed()
             }
         })
+    }
+
+    private fun configureMediaKeySettings() {
+        mediaKeySettingsButton.setOnClickListener {
+            showMediaKeySettings()
+        }
+        mediaKeySettingsClose.setOnClickListener {
+            hideMediaKeySettings()
+        }
+        mediaKeyClearAll.setOnClickListener {
+            mediaKeyPrefs.edit().clear().apply()
+            learningMediaKeyAction = null
+            learningMediaKeyDownSignature = null
+            mediaKeyStatusOverride = null
+            refreshMediaKeySettings()
+        }
+        refreshMediaKeySettings()
+    }
+
+    private fun showMediaKeySettings() {
+        mediaKeySettingsOverlay.visibility = View.VISIBLE
+        mediaKeySettingsOverlay.bringToFront()
+        learningMediaKeyAction = null
+        learningMediaKeyDownSignature = null
+        mediaKeyStatusOverride = null
+        refreshMediaKeySettings()
+    }
+
+    private fun hideMediaKeySettings() {
+        mediaKeySettingsOverlay.visibility = View.GONE
+        learningMediaKeyAction = null
+        learningMediaKeyDownSignature = null
+        mediaKeyStatusOverride = null
+        refreshMediaKeySettings()
+    }
+
+    private fun refreshMediaKeySettings() {
+        val mappedCount = mediaKeyActions.count { mediaKeyMappingLabel(it) != null }
+        mediaKeyMappingSummary.text = if (mappedCount == 0) {
+            getString(R.string.media_keys_summary_none)
+        } else {
+            getString(R.string.media_keys_summary_count, mappedCount)
+        }
+        mediaKeyLearningStatus.text = learningMediaKeyAction?.let {
+            getString(R.string.media_key_settings_waiting, getString(it.titleRes))
+        } ?: mediaKeyStatusOverride ?: getString(R.string.media_key_settings_idle)
+        mediaKeySettingsList.removeAllViews()
+        mediaKeyActions.forEach { action ->
+            mediaKeySettingsList.addView(createMediaKeyRow(action))
+        }
+    }
+
+    private fun createMediaKeyRow(action: MediaKeyAction): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            setBackgroundResource(R.drawable.device_row_bg)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dp(8)
+            }
+        }
+        row.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            addView(TextView(this@MainActivity).apply {
+                text = getString(action.titleRes)
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.libauto_text))
+                textSize = 14f
+                typeface = Typeface.DEFAULT_BOLD
+                maxLines = 1
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = mediaKeyMappingLabel(action) ?: getString(R.string.media_key_not_mapped)
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.libauto_dim))
+                textSize = 11f
+                maxLines = 1
+            })
+        })
+        row.addView(Button(this).apply {
+            text = getString(R.string.media_key_learn)
+            isAllCaps = false
+            minWidth = 0
+            minimumWidth = 0
+            minHeight = 0
+            minimumHeight = 0
+            setPadding(dp(16), 0, dp(16), 0)
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.white))
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+            setBackgroundResource(R.drawable.pill_button)
+            setOnClickListener {
+                learningMediaKeyAction = action
+                learningMediaKeyDownSignature = null
+                mediaKeyStatusOverride = null
+                refreshMediaKeySettings()
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                dp(38)
+            ).apply {
+                marginStart = dp(10)
+            }
+        })
+        row.addView(Button(this).apply {
+            text = getString(R.string.media_key_clear)
+            isAllCaps = false
+            minWidth = 0
+            minimumWidth = 0
+            minHeight = 0
+            minimumHeight = 0
+            setPadding(dp(14), 0, dp(14), 0)
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.libauto_text))
+            textSize = 13f
+            setBackgroundResource(R.drawable.pill_button_secondary)
+            setOnClickListener {
+                clearMediaKeyMapping(action)
+                if (learningMediaKeyAction == action) {
+                    learningMediaKeyAction = null
+                    learningMediaKeyDownSignature = null
+                }
+                mediaKeyStatusOverride = null
+                refreshMediaKeySettings()
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                dp(38)
+            ).apply {
+                marginStart = dp(8)
+            }
+        })
+        return row
+    }
+
+    private fun handleMediaKeyLearningEvent(event: KeyEvent): Boolean? {
+        learningMediaKeyDownSignature?.let { signature ->
+            if (event.action == KeyEvent.ACTION_UP && mediaKeyEventSignature(event) == signature) {
+                learningMediaKeyDownSignature = null
+                return true
+            }
+        }
+        val action = learningMediaKeyAction ?: return null
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+            saveMediaKeyMapping(action, event)
+            learningMediaKeyAction = null
+            learningMediaKeyDownSignature = mediaKeyEventSignature(event)
+            mediaKeyStatusOverride = getString(
+                R.string.media_key_settings_learned,
+                getString(action.titleRes),
+                describeMediaKeyEvent(event)
+            )
+            refreshMediaKeySettings()
+        }
+        return true
+    }
+
+    private fun saveMediaKeyMapping(action: MediaKeyAction, event: KeyEvent) {
+        val keyCode = event.keyCode
+        val scanCode = event.scanCode
+        val editor = mediaKeyPrefs.edit()
+        mediaKeyActions.forEach { existing ->
+            if (existing != action &&
+                mediaKeyPrefs.getInt(mediaKeyPref(existing, "keyCode"), Int.MIN_VALUE) == keyCode &&
+                mediaKeyPrefs.getInt(mediaKeyPref(existing, "scanCode"), Int.MIN_VALUE) == scanCode
+            ) {
+                editor.remove(mediaKeyPref(existing, "keyCode"))
+                editor.remove(mediaKeyPref(existing, "scanCode"))
+                editor.remove(mediaKeyPref(existing, "label"))
+            }
+        }
+        editor
+            .putInt(mediaKeyPref(action, "keyCode"), keyCode)
+            .putInt(mediaKeyPref(action, "scanCode"), scanCode)
+            .putString(mediaKeyPref(action, "label"), describeMediaKeyEvent(event))
+            .apply()
+        LogFileHelper.appendEvent(
+            this,
+            "MediaKeys",
+            "mapped ${action.key} keyCode=$keyCode scanCode=$scanCode"
+        )
+    }
+
+    private fun clearMediaKeyMapping(action: MediaKeyAction) {
+        mediaKeyPrefs.edit()
+            .remove(mediaKeyPref(action, "keyCode"))
+            .remove(mediaKeyPref(action, "scanCode"))
+            .remove(mediaKeyPref(action, "label"))
+            .apply()
+    }
+
+    private fun mediaKeyMatches(action: MediaKeyAction, event: KeyEvent): Boolean {
+        val storedKeyCode = mediaKeyPrefs.getInt(mediaKeyPref(action, "keyCode"), Int.MIN_VALUE)
+        val storedScanCode = mediaKeyPrefs.getInt(mediaKeyPref(action, "scanCode"), Int.MIN_VALUE)
+        if (storedKeyCode == Int.MIN_VALUE && storedScanCode == Int.MIN_VALUE) {
+            return false
+        }
+        if (storedKeyCode == event.keyCode && storedScanCode == event.scanCode) {
+            return true
+        }
+        return storedScanCode != Int.MIN_VALUE &&
+            storedScanCode != 0 &&
+            storedScanCode == event.scanCode
+    }
+
+    private fun mediaKeyMappingLabel(action: MediaKeyAction): String? {
+        return mediaKeyPrefs.getString(mediaKeyPref(action, "label"), null)
+    }
+
+    private fun mediaKeyPref(action: MediaKeyAction, field: String): String {
+        return "${action.key}_$field"
+    }
+
+    private fun mediaKeyEventSignature(event: KeyEvent): String {
+        return "${event.keyCode}:${event.scanCode}:${event.deviceId}"
+    }
+
+    private fun describeMediaKeyEvent(event: KeyEvent): String {
+        val keyName = KeyEvent.keyCodeToString(event.keyCode)
+            .removePrefix("KEYCODE_")
+            .lowercase(Locale.US)
+            .replace('_', ' ')
+        return if (event.scanCode != 0) {
+            "$keyName (scan ${event.scanCode})"
+        } else {
+            keyName
+        }
     }
 
     private fun configureMediaSession() {
@@ -1127,7 +1433,8 @@ class MainActivity : AppCompatActivity() {
                     @Suppress("DEPRECATION")
                     mediaButtonIntent.getParcelableExtra<KeyEvent>(Intent.EXTRA_KEY_EVENT)
                 }
-                val scanCode = event?.keyCode?.let { aaButtonCodeForKeyEvent(it) }
+                event?.let { handleMediaKeyLearningEvent(it) }?.let { return it }
+                val scanCode = event?.let { aaButtonCodeForKeyEvent(it) }
                 return if (event != null && scanCode != null) {
                     sendAaButtonKeyEvent(scanCode, event)
                 } else {
@@ -1198,7 +1505,12 @@ class MainActivity : AppCompatActivity() {
         return down || up
     }
 
-    private fun aaButtonCodeForKeyEvent(keyCode: Int): Int? {
+    private fun aaButtonCodeForKeyEvent(event: KeyEvent): Int? {
+        customAaButtonCodeForKeyEvent(event)?.let { return it }
+        return defaultAaButtonCodeForKeyCode(event.keyCode)
+    }
+
+    private fun defaultAaButtonCodeForKeyCode(keyCode: Int): Int? {
         return when (keyCode) {
             KeyEvent.KEYCODE_HOME -> AA_KEYCODE_HOME
             KeyEvent.KEYCODE_BACK -> AA_KEYCODE_BACK
@@ -1225,6 +1537,12 @@ class MainActivity : AppCompatActivity() {
             KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> AA_KEYCODE_MEDIA_FAST_FORWARD
             else -> null
         }
+    }
+
+    private fun customAaButtonCodeForKeyEvent(event: KeyEvent): Int? {
+        return mediaKeyActions.firstOrNull { action ->
+            mediaKeyMatches(action, event)
+        }?.aaScanCode
     }
 
     private fun configureProjectionTouch() {
@@ -1530,6 +1848,18 @@ class MainActivity : AppCompatActivity() {
             )
         )
         return false
+    }
+
+    private fun ensureBluetoothPermissionForAaStart(): Boolean {
+        if (!BluetoothBridge.needsBluetoothConnectPermission(this)) {
+            return true
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            pendingAaStartAfterBluetoothPermission = true
+            bluetoothPermissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
+            return false
+        }
+        return true
     }
 
     private fun ensureLocationPermission() {
