@@ -1254,7 +1254,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 val slot = firstFreeTouchSlot() ?: return
                 touchPointerSlots[event.getPointerId(event.actionIndex)] = slot
-                5
+                0
             }
             MotionEvent.ACTION_UP,
             MotionEvent.ACTION_CANCEL -> {
@@ -1268,7 +1268,7 @@ class MainActivity : AppCompatActivity() {
                 if (!touchActive) {
                     return
                 }
-                6
+                1
             }
             MotionEvent.ACTION_MOVE -> {
                 if (!touchActive) {
@@ -1355,7 +1355,12 @@ class MainActivity : AppCompatActivity() {
         if (isStationaryTouchMove(points)) {
             return true
         }
-        if (lastTouchMoveMs != 0L && now - lastTouchMoveMs < 33L) {
+        val minIntervalMs = if (points.size > 1) {
+            TOUCH_MOVE_MULTI_INTERVAL_MS
+        } else {
+            TOUCH_MOVE_SINGLE_INTERVAL_MS
+        }
+        if (lastTouchMoveMs != 0L && now - lastTouchMoveMs < minIntervalMs) {
             return true
         }
         lastTouchMoveMs = now
@@ -1371,12 +1376,12 @@ class MainActivity : AppCompatActivity() {
         val primary = points.firstOrNull { it.slot == 0 } ?: points.firstOrNull()
         val secondary = points.firstOrNull { it.slot == 1 }
         val primaryStationary = primary == null ||
-            (kotlin.math.abs(primary.x - lastTouchX) < 4 &&
-                kotlin.math.abs(primary.y - lastTouchY) < 4)
+            (kotlin.math.abs(primary.x - lastTouchX) < TOUCH_MOVE_DEAD_ZONE_PX &&
+                kotlin.math.abs(primary.y - lastTouchY) < TOUCH_MOVE_DEAD_ZONE_PX)
         val secondaryStationary = secondary == null ||
             (lastTouchSecondX >= 0 &&
-                kotlin.math.abs(secondary.x - lastTouchSecondX) < 4 &&
-                kotlin.math.abs(secondary.y - lastTouchSecondY) < 4)
+                kotlin.math.abs(secondary.x - lastTouchSecondX) < TOUCH_MOVE_DEAD_ZONE_PX &&
+                kotlin.math.abs(secondary.y - lastTouchSecondY) < TOUCH_MOVE_DEAD_ZONE_PX)
         return primaryStationary && secondaryStationary
     }
 
@@ -1578,5 +1583,8 @@ class MainActivity : AppCompatActivity() {
         const val AA_KEYCODE_MEDIA_FAST_FORWARD = 90
         const val AA_KEYCODE_MEDIA_PLAY = 126
         const val AA_KEYCODE_MEDIA_PAUSE = 127
+        const val TOUCH_MOVE_SINGLE_INTERVAL_MS = 50L
+        const val TOUCH_MOVE_MULTI_INTERVAL_MS = 80L
+        const val TOUCH_MOVE_DEAD_ZONE_PX = 10
     }
 }

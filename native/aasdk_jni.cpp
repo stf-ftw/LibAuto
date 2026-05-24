@@ -92,8 +92,8 @@ constexpr int kAudioInputChannels = 1;
 constexpr int kAudioBitDepth = 16;
 constexpr uint32_t kMaxUnacked = 1;
 constexpr uint32_t kMediaAudioMaxUnacked = 4;
-constexpr int32_t kMaxTouchInFlight = 2;
-constexpr int32_t kMaxTouchHardLimit = 8;
+constexpr int32_t kMaxTouchInFlight = 1;
+constexpr int32_t kMaxTouchHardLimit = 4;
 constexpr std::array<uint32_t, 20> kSupportedButtonCodes = {
     3,     // HOME
     4,     // BACK
@@ -616,7 +616,8 @@ void sendTouchEventMulti(
         touch->set_action_index(static_cast<uint32_t>(
             std::clamp(action_index, 0, static_cast<int32_t>(points.size() - 1))
         ));
-        touch->set_touch_action(static_cast<proto::enums::TouchAction_Enum>(action));
+        const auto touch_action = toTouchAction(action);
+        touch->set_touch_action(touch_action);
         const auto config = currentVideoConfig();
         for (const auto& point : points) {
             auto* location = touch->add_touch_location();
@@ -629,8 +630,9 @@ void sendTouchEventMulti(
         if (count <= 8 || count % 200 == 0) {
             const auto& first = points.front();
             native_log::Logf(LOG_TAG, "I",
-                             "AA touch action=%d x=%d y=%d pointer=%d actionIndex=%d pointers=%zu count=%llu",
-                             action, first.x, first.y, first.pointer_id, action_index, points.size(),
+                             "AA touch action=%d raw=%d x=%d y=%d pointer=%d actionIndex=%d pointers=%zu count=%llu",
+                             static_cast<int>(touch_action), action,
+                             first.x, first.y, first.pointer_id, action_index, points.size(),
                              static_cast<unsigned long long>(count));
         }
 
