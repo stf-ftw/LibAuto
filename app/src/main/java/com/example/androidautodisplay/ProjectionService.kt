@@ -111,8 +111,6 @@ class ProjectionService : Service() {
                         aaStartInProgress = false
                     }
                     CarSensorBridge.stop()
-                    AasdkNative.nativeStopAaSession()
-                    appendUsbLog("AASDK session reset after USB close")
                 }
             }
         )
@@ -490,8 +488,6 @@ class ProjectionService : Service() {
             }
             return
         }
-        AasdkNative.nativeStopAaSession()
-        appendUsbLog("Cleared previous AASDK session state")
         usbController.markAaStarting()
         CarSensorBridge.start()
         applyProjectionResolutionSetting()

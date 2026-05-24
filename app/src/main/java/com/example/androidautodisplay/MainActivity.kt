@@ -938,7 +938,6 @@ class MainActivity : AppCompatActivity() {
             return
         }
         pendingSelectedDeviceName = null
-        resetProjectionPipeline()
         cancelPendingProjectionClose()
         projectionStarting = true
         aasdkRunning = false
@@ -971,7 +970,6 @@ class MainActivity : AppCompatActivity() {
         touchActive = false
         touchPointerSlots.clear()
         resetTouchMovement()
-        resetProjectionPipeline()
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         videoSurface.visibility = View.GONE
         projectionContainer.visibility = View.GONE
@@ -1533,7 +1531,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startAaSession() {
-        resetProjectionPipeline()
         cancelPendingProjectionClose()
         projectionStarting = true
         aasdkRunning = false
