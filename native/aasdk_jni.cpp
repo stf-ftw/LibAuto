@@ -73,7 +73,10 @@
 #include <f1x/aasdk/Messenger/MessageInStream.hpp>
 #include <f1x/aasdk/Messenger/MessageOutStream.hpp>
 #include <f1x/aasdk/Messenger/Messenger.hpp>
+#include <f1x/aasdk/TCP/TCPEndpoint.hpp>
+#include <f1x/aasdk/TCP/TCPWrapper.hpp>
 #include <f1x/aasdk/Transport/SSLWrapper.hpp>
+#include <f1x/aasdk/Transport/TCPTransport.hpp>
 
 #include <openssl/err.h>
 
@@ -587,7 +590,9 @@ struct AaSession {
     using WorkGuard = boost::asio::executor_work_guard<boost::asio::io_service::executor_type>;
     std::unique_ptr<WorkGuard> work_guard;
     std::thread io_thread;
-    std::shared_ptr<AndroidUsbTransport> transport;
+    std::shared_ptr<transport::Transport> transport;
+    std::shared_ptr<tcp::TCPWrapper> tcp_wrapper;
+    tcp::ITCPEndpoint::SocketPointer tcp_socket;
     std::shared_ptr<transport::SSLWrapper> ssl_wrapper;
     std::shared_ptr<messenger::Cryptor> cryptor;
     std::shared_ptr<messenger::MessageInStream> in_stream;
@@ -616,6 +621,9 @@ struct AaSession {
 };
 
 std::shared_ptr<AaSession> g_session;
+std::thread g_tcp_accept_thread;
+std::shared_ptr<boost::asio::ip::tcp::acceptor> g_tcp_acceptor;
+std::atomic<bool> g_tcp_accepting{false};
 
 VideoConfigInfo currentVideoConfig() {
     auto width = g_video_width.load();
@@ -1921,20 +1929,15 @@ private:
     bool channel_failed_ = false;
 };
 
-bool startAaSession() {
-    std::lock_guard<std::mutex> lock(g_session_mutex);
-    if (g_session != nullptr) {
-        native_log::Log(LOG_TAG, "I", "AA session already running");
-        return true;
-    }
-
-    native_log::Log(LOG_TAG, "I", "AA session starting");
+bool startAaSessionWithTransport(
+    std::shared_ptr<AaSession> session,
+    std::shared_ptr<transport::Transport> transport,
+    const char* label) {
+    native_log::Logf(LOG_TAG, "I", "AA session starting transport=%s", label);
     g_video_frame_count.store(0);
     g_touch_event_count.store(0);
     g_button_event_count.store(0);
-    auto session = std::make_shared<AaSession>();
-    session->work_guard = std::make_unique<AaSession::WorkGuard>(session->io.get_executor());
-    session->transport = std::make_shared<AndroidUsbTransport>(session->io);
+    session->transport = std::move(transport);
     session->ssl_wrapper = std::make_shared<transport::SSLWrapper>();
     session->cryptor = std::make_shared<messenger::Cryptor>(session->ssl_wrapper);
     session->in_stream = std::make_shared<messenger::MessageInStream>(
@@ -2017,13 +2020,121 @@ bool startAaSession() {
     return true;
 }
 
+bool startAaSession() {
+    std::lock_guard<std::mutex> lock(g_session_mutex);
+    if (g_session != nullptr) {
+        native_log::Log(LOG_TAG, "I", "AA session already running");
+        return true;
+    }
+
+    auto session = std::make_shared<AaSession>();
+    session->work_guard = std::make_unique<AaSession::WorkGuard>(session->io.get_executor());
+    auto transport = std::make_shared<AndroidUsbTransport>(session->io);
+    return startAaSessionWithTransport(std::move(session), std::move(transport), "usb");
+}
+
+bool startAaSessionOverTcp(uint16_t port) {
+    std::lock_guard<std::mutex> lock(g_session_mutex);
+    if (g_session != nullptr) {
+        native_log::Log(LOG_TAG, "I", "AA TCP start ignored: session already running");
+        return true;
+    }
+    if (g_tcp_accepting.load()) {
+        native_log::Log(LOG_TAG, "I", "AA TCP listener already running");
+        return true;
+    }
+    if (g_tcp_accept_thread.joinable()) {
+        g_tcp_accept_thread.join();
+    }
+
+    g_tcp_accepting.store(true);
+    g_tcp_accept_thread = std::thread([port]() {
+        auto session = std::make_shared<AaSession>();
+        session->work_guard = std::make_unique<AaSession::WorkGuard>(session->io.get_executor());
+        session->tcp_wrapper = std::make_shared<tcp::TCPWrapper>();
+        session->tcp_socket = std::make_shared<boost::asio::ip::tcp::socket>(session->io);
+        try {
+            auto acceptor = std::make_shared<boost::asio::ip::tcp::acceptor>(session->io);
+            {
+                std::lock_guard<std::mutex> lock(g_session_mutex);
+                g_tcp_acceptor = acceptor;
+            }
+            boost::asio::ip::tcp::endpoint endpoint(boost::asio::ip::tcp::v4(), port);
+            boost::system::error_code ec;
+            acceptor->open(endpoint.protocol(), ec);
+            if (ec) {
+                set_error("AA TCP listen open failed: " + ec.message());
+                g_tcp_accepting.store(false);
+                return;
+            }
+            acceptor->set_option(boost::asio::ip::tcp::acceptor::reuse_address(true), ec);
+            acceptor->bind(endpoint, ec);
+            if (ec) {
+                set_error("AA TCP listen bind failed: " + ec.message());
+                g_tcp_accepting.store(false);
+                return;
+            }
+            acceptor->listen(boost::asio::socket_base::max_listen_connections, ec);
+            if (ec) {
+                set_error("AA TCP listen failed: " + ec.message());
+                g_tcp_accepting.store(false);
+                return;
+            }
+            native_log::Logf(LOG_TAG, "I", "AA TCP listening on 0.0.0.0:%u", port);
+            acceptor->accept(*session->tcp_socket, ec);
+            if (ec) {
+                native_log::Logf(LOG_TAG, "W", "AA TCP accept stopped/failed: %s", ec.message().c_str());
+                g_tcp_accepting.store(false);
+                return;
+            }
+            native_log::Logf(LOG_TAG, "I",
+                             "AA TCP accepted from %s",
+                             session->tcp_socket->remote_endpoint().address().to_string().c_str());
+            auto endpointPtr = std::make_shared<tcp::TCPEndpoint>(
+                *session->tcp_wrapper,
+                session->tcp_socket
+            );
+            auto transport = std::make_shared<transport::TCPTransport>(session->io, endpointPtr);
+            {
+                std::lock_guard<std::mutex> lock(g_session_mutex);
+                if (g_session != nullptr) {
+                    native_log::Log(LOG_TAG, "W", "AA TCP accepted but another session is active");
+                    g_tcp_accepting.store(false);
+                    return;
+                }
+                startAaSessionWithTransport(std::move(session), std::move(transport), "tcp");
+            }
+            g_tcp_accepting.store(false);
+        } catch (const std::exception& e) {
+            set_error(std::string("AA TCP listener exception: ") + e.what());
+            g_tcp_accepting.store(false);
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_session_mutex);
+            g_tcp_acceptor.reset();
+        }
+    });
+    return true;
+}
+
 void stopAaSession() {
     std::shared_ptr<AaSession> session;
+    std::shared_ptr<boost::asio::ip::tcp::acceptor> acceptor;
     {
         std::lock_guard<std::mutex> lock(g_session_mutex);
         session = g_session;
         g_session.reset();
+        acceptor = g_tcp_acceptor;
     }
+    if (acceptor != nullptr) {
+        boost::system::error_code ec;
+        acceptor->close(ec);
+    }
+    if (g_tcp_accept_thread.joinable() &&
+        g_tcp_accept_thread.get_id() != std::this_thread::get_id()) {
+        g_tcp_accept_thread.join();
+    }
+    g_tcp_accepting.store(false);
     if (session == nullptr) {
         return;
     }
@@ -2318,6 +2429,22 @@ Java_com_example_androidautodisplay_AasdkNative_nativeStartAaOverUsb(JNIEnv*, jo
     g_last_error.clear();
     try {
         return startAaSession() ? JNI_TRUE : JNI_FALSE;
+    } catch (const std::exception& e) {
+        set_error(e.what());
+        return JNI_FALSE;
+    }
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_example_androidautodisplay_AasdkNative_nativeStartAaOverTcp(JNIEnv*, jobject, jint port) {
+    native_log::Logf(LOG_TAG, "I", "nativeStartAaOverTcp entered port=%d", static_cast<int>(port));
+    g_last_error.clear();
+    try {
+        if (port <= 0 || port > 65535) {
+            set_error("Invalid TCP port for wireless Android Auto");
+            return JNI_FALSE;
+        }
+        return startAaSessionOverTcp(static_cast<uint16_t>(port)) ? JNI_TRUE : JNI_FALSE;
     } catch (const std::exception& e) {
         set_error(e.what());
         return JNI_FALSE;

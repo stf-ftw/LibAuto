@@ -94,6 +94,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var usbShareLogsButton: Button
     private lateinit var usbProbeButton: Button
     private lateinit var usbProbeResults: TextView
+    private lateinit var wirelessStatusText: TextView
+    private lateinit var wirelessStartButton: Button
+    private lateinit var wirelessStopButton: Button
     private lateinit var aoapManufacturerInput: EditText
     private lateinit var aoapModelInput: EditText
     private lateinit var aoapDescriptionInput: EditText
@@ -124,6 +127,7 @@ class MainActivity : AppCompatActivity() {
     private var pendingAaStartAfterMicPermission = false
     private var pendingAaStartAfterLocationPermission = false
     private var pendingAaStartAfterBluetoothPermission = false
+    private var pendingWirelessAaStart = false
     private var pendingSelectedDeviceName: String? = null
     private var autoConnectAttemptedDeviceName: String? = null
     private var projectionVideoWidth = 1280
@@ -184,6 +188,10 @@ class MainActivity : AppCompatActivity() {
         MicInputBridge.setPermissionGranted(granted)
         if (granted && pendingSelectedDeviceName != null) {
             continueSelectedDeviceStart()
+        } else if (granted && pendingWirelessAaStart) {
+            if (ensureLocationPermissionForAaStart() && ensureBluetoothPermissionForAaStart()) {
+                startWirelessAaSession()
+            }
         } else if (granted && pendingAaStartAfterMicPermission) {
             if (ensureLocationPermissionForAaStart() && ensureBluetoothPermissionForAaStart()) {
                 startAaSession()
@@ -213,6 +221,8 @@ class MainActivity : AppCompatActivity() {
         if (pendingAaStartAfterBluetoothPermission) {
             if (pendingSelectedDeviceName != null) {
                 continueSelectedDeviceStart()
+            } else if (pendingWirelessAaStart) {
+                startWirelessAaSession()
             } else {
                 startAaSession()
             }
@@ -235,6 +245,8 @@ class MainActivity : AppCompatActivity() {
         if (pendingAaStartAfterLocationPermission) {
             if (pendingSelectedDeviceName != null) {
                 continueSelectedDeviceStart()
+            } else if (pendingWirelessAaStart && ensureBluetoothPermissionForAaStart()) {
+                startWirelessAaSession()
             } else if (ensureBluetoothPermissionForAaStart()) {
                 startAaSession()
             }
@@ -365,6 +377,18 @@ class MainActivity : AppCompatActivity() {
                         shareLogs(uri)
                     }
                 }
+                Constants.ACTION_WIRELESS_STATUS -> {
+                    val status = intent.getStringExtra(Constants.EXTRA_STATUS) ?: "unknown"
+                    val details = intent.getStringExtra(Constants.EXTRA_WIRELESS_DETAILS) ?: status
+                    wirelessStatusText.text = details
+                    if (status == "bluetooth_connected" ||
+                        status == "wifi_info_requested" ||
+                        status == "wifi_connection_status" ||
+                        status == "wifi_start_response"
+                    ) {
+                        statusText.text = getString(R.string.status_wifi)
+                    }
+                }
             }
         }
     }
@@ -416,6 +440,9 @@ class MainActivity : AppCompatActivity() {
         usbShareLogsButton = findViewById(R.id.usb_share_logs_button)
         usbProbeButton = findViewById(R.id.usb_probe_button)
         usbProbeResults = findViewById(R.id.usb_probe_results)
+        wirelessStatusText = findViewById(R.id.wireless_status_text)
+        wirelessStartButton = findViewById(R.id.wireless_start_button)
+        wirelessStopButton = findViewById(R.id.wireless_stop_button)
         aoapManufacturerInput = findViewById(R.id.aoap_manufacturer_input)
         aoapModelInput = findViewById(R.id.aoap_model_input)
         aoapDescriptionInput = findViewById(R.id.aoap_description_input)
@@ -562,6 +589,24 @@ class MainActivity : AppCompatActivity() {
             })
         }
 
+        wirelessStartButton.setOnClickListener {
+            pendingWirelessAaStart = true
+            if (ensureMicrophonePermissionForAaStart() &&
+                ensureLocationPermissionForAaStart() &&
+                ensureBluetoothPermissionForAaStart()
+            ) {
+                startWirelessAaSession()
+            }
+        }
+
+        wirelessStopButton.setOnClickListener {
+            pendingWirelessAaStart = false
+            startService(Intent(this, ProjectionService::class.java).apply {
+                action = Constants.ACTION_WIRELESS_STOP
+            })
+            showLauncherScreen()
+        }
+
         aoapSaveButton.setOnClickListener {
             aoapPrefs.edit()
                 .putString(Constants.AOAP_MANUFACTURER, aoapManufacturerInput.text.toString())
@@ -629,6 +674,7 @@ class MainActivity : AppCompatActivity() {
                 addAction(Constants.ACTION_TRANSPORT_PING)
                 addAction(Constants.ACTION_TRANSPORT_LOGS)
                 addAction(Constants.ACTION_USB_LOGS)
+                addAction(Constants.ACTION_WIRELESS_STATUS)
             })
             statusReceiverRegistered = true
         }
@@ -1875,6 +1921,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun startAaSession() {
         cancelPendingProjectionClose()
+        pendingWirelessAaStart = false
         projectionStarting = true
         aasdkRunning = false
         showProjectionScreen()
@@ -1885,6 +1932,20 @@ class MainActivity : AppCompatActivity() {
             action = Constants.ACTION_USB_AA_START
         })
         usbStartAaButton.isEnabled = false
+    }
+
+    private fun startWirelessAaSession() {
+        cancelPendingProjectionClose()
+        pendingWirelessAaStart = false
+        projectionStarting = true
+        aasdkRunning = false
+        showProjectionScreen()
+        projectionStatus.visibility = View.VISIBLE
+        projectionStatus.text = getString(R.string.projection_connecting)
+        CarSensorBridge.start()
+        ContextCompat.startForegroundService(this, Intent(this, ProjectionService::class.java).apply {
+            action = Constants.ACTION_WIRELESS_START
+        })
     }
 
     private companion object {

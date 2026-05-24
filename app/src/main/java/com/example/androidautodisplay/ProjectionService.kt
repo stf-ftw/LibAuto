@@ -24,6 +24,7 @@ class ProjectionService : Service() {
     private lateinit var sessionController: SessionController
     private lateinit var transportController: TransportTestController
     private lateinit var usbController: UsbIoController
+    private lateinit var wirelessController: WirelessAaController
     private val logBuffer = ArrayDeque<String>()
     private val usbLogBuffer = ArrayDeque<String>()
     private var projectionRunning = false
@@ -117,6 +118,10 @@ class ProjectionService : Service() {
                 }
             }
         )
+        wirelessController = WirelessAaController(this) { message ->
+            appendUsbLog(message)
+            LogFileHelper.appendEvent(this, "WirelessAa", message)
+        }
         UsbJniBridge.attach(usbController)
         val initOk = AasdkNative.nativeInit()
         AasdkNative.nativeSetLogPath(LogFileHelper.getNativeLogFile(this).absolutePath)
@@ -150,6 +155,23 @@ class ProjectionService : Service() {
             }
             Constants.ACTION_STOP -> {
                 sessionController.stop()
+                wirelessController.stop()
+                projectionRunning = false
+                maybeStopService()
+            }
+            Constants.ACTION_WIRELESS_START -> {
+                projectionRunning = true
+                ensureForeground("Wireless Android Auto")
+                appendUsbLog("Wireless AA start requested")
+                CarSensorBridge.start()
+                applyProjectionResolutionSetting()
+                val ok = wirelessController.start(Constants.DEFAULT_TRANSPORT_PORT)
+                appendUsbLog("Wireless AA start result: $ok")
+            }
+            Constants.ACTION_WIRELESS_STOP -> {
+                appendUsbLog("Wireless AA stop requested")
+                wirelessController.stop()
+                CarSensorBridge.stop()
                 projectionRunning = false
                 maybeStopService()
             }
@@ -582,6 +604,9 @@ class ProjectionService : Service() {
     override fun onDestroy() {
         unregisterReceiver(usbPermissionReceiver)
         UsbJniBridge.detach()
+        if (::wirelessController.isInitialized) {
+            wirelessController.stop()
+        }
         CarSensorBridge.stop()
         usbController.stopMonitoring()
         super.onDestroy()

@@ -24,6 +24,9 @@ object Constants {
     const val ACTION_USB_SELECT_AND_START = "ro.stf_ftw.libauto.USB_SELECT_AND_START"
     const val ACTION_USB_LOGS = "ro.stf_ftw.libauto.USB_LOGS"
     const val ACTION_USB_EVENT = "ro.stf_ftw.libauto.USB_EVENT"
+    const val ACTION_WIRELESS_START = "ro.stf_ftw.libauto.WIRELESS_START"
+    const val ACTION_WIRELESS_STOP = "ro.stf_ftw.libauto.WIRELESS_STOP"
+    const val ACTION_WIRELESS_STATUS = "ro.stf_ftw.libauto.WIRELESS_STATUS"
 
     const val EXTRA_STATUS = "status"
     const val EXTRA_HOST = "host"
@@ -54,6 +57,7 @@ object Constants {
     const val EXTRA_USB_DEVICE_NAME = "usb_device_name"
     const val EXTRA_USB_PERMISSION_GRANTED = "usb_permission_granted"
     const val EXTRA_USB_LOG_PATH = "usb_log_path"
+    const val EXTRA_WIRELESS_DETAILS = "wireless_details"
     const val USB_PERMISSION = "ro.stf_ftw.libauto.USB_PERMISSION"
 
     const val AOAP_PREFS = "aoap_prefs"

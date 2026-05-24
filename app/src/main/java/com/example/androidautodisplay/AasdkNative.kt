@@ -9,6 +9,7 @@ object AasdkNative {
     external fun nativeWarmJvmBindings(): Boolean
     external fun nativeStart(): Boolean
     external fun nativeStartAaOverUsb(): Boolean
+    external fun nativeStartAaOverTcp(port: Int): Boolean
     external fun nativeSetLogPath(path: String)
     external fun nativeSetVideoResolution(
         width: Int,
