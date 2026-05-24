@@ -74,6 +74,7 @@ class ProjectionService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        LogFileHelper.appendEvent(this, "ProjectionService", "onCreate")
         CarSensorBridge.initialize(this)
         sessionController = SessionController(this)
         transportController = TransportTestController(
@@ -129,6 +130,7 @@ class ProjectionService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
+        LogFileHelper.appendEvent(this, "ProjectionService", "onStartCommand action=$action")
         when (action) {
             Constants.ACTION_START -> {
                 projectionRunning = true
@@ -224,9 +226,11 @@ class ProjectionService : Service() {
             Constants.ACTION_USB_SELECT_AND_START -> {
                 usbMonitoring = true
                 ensureForeground("USB device selected")
+                LogFileHelper.appendEvent(this, "ProjectionService", "select/start: startMonitoring")
                 usbController.startMonitoring()
                 val deviceName = intent.getStringExtra(Constants.EXTRA_USB_DEVICE_NAME)
                 appendUsbLog("USB select/start requested device=$deviceName")
+                LogFileHelper.appendEvent(this, "ProjectionService", "select/start device=$deviceName")
                 if (deviceName.isNullOrBlank()) {
                     appendUsbLog("USB select/start blocked: no device name")
                 } else if (!usbController.selectDeviceForAa(deviceName)) {
@@ -409,6 +413,14 @@ class ProjectionService : Service() {
                 builder.append("\n\n=== Native File Log ===\n")
                 builder.append("(native log file missing)")
             }
+            val eventLog = LogFileHelper.getEventLogFile(this)
+            if (eventLog.exists()) {
+                builder.append("\n\n=== LibAuto Event Log ===\n")
+                builder.append(eventLog.readText())
+            } else {
+                builder.append("\n\n=== LibAuto Event Log ===\n")
+                builder.append("(event log missing)")
+            }
             if (includeLogcat) {
                 builder.append("\n\n=== Native Logcat ===\n")
                 builder.append(captureLogcat())
@@ -471,6 +483,7 @@ class ProjectionService : Service() {
     }
 
     private fun startAaSessionIfReady(source: String) {
+        LogFileHelper.appendEvent(this, "ProjectionService", "startAaSessionIfReady source=$source")
         synchronized(this) {
             if (aaStarted || aaStartInProgress) {
                 appendUsbLog("AA start ignored ($source): already started or starting")
@@ -481,6 +494,7 @@ class ProjectionService : Service() {
         appendUsbLog("Starting AASDK / AA session ($source)")
         val ready = usbController.getSnapshot().readyForIo
         appendUsbLog("AA start requested; usbReady=$ready")
+        LogFileHelper.appendEvent(this, "ProjectionService", "AA start requested usbReady=$ready")
         if (!ready) {
             appendUsbLog("AA start blocked: USB not ready")
             synchronized(this) {
@@ -493,6 +507,7 @@ class ProjectionService : Service() {
         applyProjectionResolutionSetting()
         val ok = AasdkNative.nativeStartAaOverUsb()
         appendUsbLog("AA native start result: $ok")
+        LogFileHelper.appendEvent(this, "ProjectionService", "AA native start result=$ok")
         if (ok) {
             appendUsbLog("AASDK session started")
             synchronized(this) {

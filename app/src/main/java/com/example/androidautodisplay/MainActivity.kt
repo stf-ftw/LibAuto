@@ -96,6 +96,7 @@ class MainActivity : AppCompatActivity() {
     private var projectionStarting = false
     private var statusReceiverRegistered = false
     private var pendingProjectionCloseReason: String? = null
+    private var lastLoggedProjectionUsbState: String? = null
     private val projectionCloseHandler = Handler(Looper.getMainLooper())
     private val delayedProjectionClose = Runnable {
         pendingProjectionCloseReason = null
@@ -309,12 +310,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        LogFileHelper.appendEvent(this, "MainActivity", "onCreate")
         setContentView(R.layout.activity_main)
-        val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
-        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
-            LogFileHelper.appendException(this, "Java crash on ${thread.name}", throwable)
-            previousHandler?.uncaughtException(thread, throwable)
-        }
 
         launcherContainer = findViewById(R.id.launcher_container)
         projectionContainer = findViewById(R.id.projection_container)
@@ -542,6 +539,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        LogFileHelper.appendEvent(this, "MainActivity", "onResume")
         MicInputBridge.setPermissionGranted(hasMicrophonePermission())
         updateWifiStatus()
         updateNetworkInfo()
@@ -576,6 +574,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
+        LogFileHelper.appendEvent(this, "MainActivity", "onPause")
         if (statusReceiverRegistered) {
             try {
                 unregisterReceiver(statusReceiver)
@@ -589,6 +588,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        LogFileHelper.appendEvent(this, "MainActivity", "onDestroy")
         CarSensorBridge.stop()
         videoSink.stop()
         audioSink.stop()
@@ -922,6 +922,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun startSelectedDeviceFlow(deviceName: String) {
         pendingSelectedDeviceName = deviceName
+        LogFileHelper.appendEvent(this, "MainActivity", "startSelectedDeviceFlow device=$deviceName")
         if (ensureMicrophonePermissionForAaStart() && ensureLocationPermissionForAaStart()) {
             continueSelectedDeviceStart()
         }
@@ -941,6 +942,7 @@ class MainActivity : AppCompatActivity() {
         cancelPendingProjectionClose()
         projectionStarting = true
         aasdkRunning = false
+        LogFileHelper.appendEvent(this, "MainActivity", "continueSelectedDeviceStart device=$deviceName")
         showProjectionScreen()
         projectionStatus.visibility = View.VISIBLE
         projectionStatus.text = getString(R.string.projection_connecting)
@@ -952,6 +954,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun showProjectionScreen() {
         cancelPendingProjectionClose()
+        if (projectionContainer.visibility != View.VISIBLE) {
+            LogFileHelper.appendEvent(this, "MainActivity", "showProjectionScreen")
+        }
         launcherContainer.visibility = View.GONE
         projectionContainer.visibility = View.VISIBLE
         videoSurface.visibility = View.VISIBLE
@@ -965,6 +970,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         cancelPendingProjectionClose()
+        LogFileHelper.appendEvent(this, "MainActivity", "showLauncherScreen")
         aasdkRunning = false
         projectionStarting = false
         touchActive = false
@@ -981,6 +987,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleProjectionUsbState(state: String?) {
+        if (!state.isNullOrBlank() && state != lastLoggedProjectionUsbState) {
+            lastLoggedProjectionUsbState = state
+            LogFileHelper.appendEvent(
+                this,
+                "MainActivity",
+                "usbState=$state projectionStarting=$projectionStarting aasdkRunning=$aasdkRunning"
+            )
+        }
         when (state) {
             "STARTING_AA",
             "AA_TLS_HANDSHAKE" -> {

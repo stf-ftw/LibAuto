@@ -6,6 +6,7 @@
 #include <ctime>
 #include <mutex>
 #include <string>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <thread>
 #include <sys/syscall.h>
@@ -16,6 +17,7 @@ namespace native_log {
 namespace {
 std::mutex g_log_mutex;
 std::string g_log_path;
+constexpr off_t kMaxNativeLogBytes = 512 * 1024;
 
 std::string timestamp() {
     struct timeval tv;
@@ -33,6 +35,14 @@ void write_line(const std::string& line) {
     if (g_log_path.empty()) {
         return;
     }
+    struct stat st {};
+    if (stat(g_log_path.c_str(), &st) == 0 && st.st_size > kMaxNativeLogBytes) {
+        FILE* trim = std::fopen(g_log_path.c_str(), "w");
+        if (trim != nullptr) {
+            std::fputs("=== native log trimmed ===\n", trim);
+            std::fclose(trim);
+        }
+    }
     FILE* fp = std::fopen(g_log_path.c_str(), "a");
     if (fp == nullptr) {
         return;
@@ -47,8 +57,9 @@ void SetLogFilePath(const std::string& path) {
     std::lock_guard<std::mutex> lock(g_log_mutex);
     g_log_path = path;
     if (!g_log_path.empty()) {
-        FILE* fp = std::fopen(g_log_path.c_str(), "w");
+        FILE* fp = std::fopen(g_log_path.c_str(), "a");
         if (fp != nullptr) {
+            std::fputs("\n=== native log session ===\n", fp);
             std::fclose(fp);
         }
     }
