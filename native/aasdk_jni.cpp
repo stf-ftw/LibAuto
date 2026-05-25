@@ -104,7 +104,7 @@ constexpr uint32_t kMaxUnacked = 1;
 constexpr uint32_t kMediaAudioMaxUnacked = 4;
 constexpr int32_t kMaxTouchInFlight = 2;
 constexpr int32_t kMaxTouchHardLimit = 6;
-constexpr std::array<uint32_t, 16> kSupportedButtonCodes = {
+constexpr std::array<uint32_t, 19> kSupportedButtonCodes = {
     static_cast<uint32_t>(proto::enums::ButtonCode::MENU),
     static_cast<uint32_t>(proto::enums::ButtonCode::HOME),
     static_cast<uint32_t>(proto::enums::ButtonCode::BACK),
@@ -119,6 +119,9 @@ constexpr std::array<uint32_t, 16> kSupportedButtonCodes = {
     static_cast<uint32_t>(proto::enums::ButtonCode::TOGGLE_PLAY),
     static_cast<uint32_t>(proto::enums::ButtonCode::NEXT),
     static_cast<uint32_t>(proto::enums::ButtonCode::PREV),
+    86, // STOP
+    89, // REWIND
+    90, // FAST_FORWARD
     static_cast<uint32_t>(proto::enums::ButtonCode::PLAY),
     static_cast<uint32_t>(proto::enums::ButtonCode::PAUSE)
 };

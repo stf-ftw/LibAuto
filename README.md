@@ -17,6 +17,7 @@ LibAuto is usable as an experimental head-unit app. The tested happy path is:
 - Video, audio, touch, two-finger gestures, and media keys are implemented.
 - GPS-backed vehicle speed and basic fake-car sensors are sent when requested.
 - The UI is fullscreen and optimized for 1024x600, 16:10 tablet displays, and common 16:9 projection sizes.
+- Experimental wireless Android Auto work is present in the codebase, but the launcher controls are hidden until the Bluetooth/Wi-Fi bootstrap is reliable enough for testing.
 
 This is still not a certified Android Auto receiver. Expect device-specific behavior, especially on heavily modified Android head units.
 
@@ -50,7 +51,7 @@ Requirements:
 - Native-aspect option for non-16:9 head-unit screens.
 - Local video rendering with letterbox/fill handling.
 - Touch and two-pointer gesture forwarding.
-- Hardware/media key forwarding for play, pause, next, previous, and related controls.
+- Learnable hardware/media key forwarding for play, pause, stop, next, previous, rewind, fast-forward, voice, call, and related controls.
 - Audio playback through Android `AudioTrack`.
 - Microphone channel support for Android Auto voice input.
 - Sensor channel support for driving status, night mode, GPS speed, gear, and parking brake.
@@ -137,9 +138,8 @@ For current Google Play submissions, Google’s [target API requirement](https:/
 ## Important Limitations
 
 - Android Auto is not a public receiver protocol. Compatibility can change with phone-side Android Auto updates.
-- Wireless Android Auto is not implemented as a standalone dongle bridge.
+- Wireless Android Auto is still in development and is currently hidden from the normal UI.
 - The app depends on Android USB host behavior. Some car head units block or virtualize USB devices in ways third-party apps cannot access.
-- Play Store approval is not guaranteed because projection/head-unit apps may be subject to Google policy review and trademark/product-representation constraints.
 - The legacy head-unit APK intentionally targets an older SDK for sideloaded head-unit compatibility; do not upload that flavor to Google Play.
 
 ## Documentation

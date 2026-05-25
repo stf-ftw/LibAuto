@@ -2,8 +2,8 @@
 
 Current release build:
 
-- Version name: `0.4`
-- Version code: `4`
+- Version name: `0.5`
+- Version code: `5`
 - Application id: `ro.stf_ftw.libauto`
 - Minimum SDK: 26
 - ABIs: `armeabi-v7a`, `arm64-v8a`
@@ -51,13 +51,13 @@ Download `LibAuto-standard.apk` first.
 
 If it does not install or crashes immediately on an older/Chinese Android head unit, try `LibAuto-legacy-headunit.apk` instead.
 
-## Changes Since v0.3
+## Changes Since v0.4
 
-- Added a dedicated media-key mapping screen opened from the launcher gear button.
-- Expanded learnable head-unit controls to include previous, next, play/pause, play, pause, stop, rewind, fast-forward, voice, call, and end-call.
-- Kept the launcher layout fullscreen while moving media-key setup out of the bottom of the main screen.
-- Routed learned hard-key actions through the Android Auto button/input path used by the active projection session.
-- Kept the standard APK on current Android/Play target requirements and the legacy APK on older target behavior for problematic sideloaded head units.
+- Restored reliable two-finger gesture forwarding by preserving Android Auto's raw multi-touch pointer actions.
+- Fixed intermittent green/macroblock video corruption by feeding H.264 frames to the decoder in reference order and waiting for a clean keyframe after queue recovery.
+- Added the missing stop, rewind, and fast-forward actions to the media-key learner and Android media-session bridge.
+- Shortened the native USB idle fallback so missed unplug events return to the launcher faster.
+- Hid the experimental wireless Android Auto controls from the launcher while wireless support remains under development.
 
 ## Notes
 
