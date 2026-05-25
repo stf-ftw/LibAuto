@@ -19,7 +19,7 @@ object AaProjectionSink : SurfaceHolder.Callback {
     private const val INPUT_TIMEOUT_US = 0L
     private const val MAX_AUDIO_BUFFER_DURATION_MS = 500
     private const val MIN_AUDIO_QUEUE_BYTES = 32 * 1024
-    private const val MAX_VIDEO_QUEUE_FRAMES = 6
+    private const val MAX_VIDEO_QUEUE_FRAMES = 8
     private const val SLOW_AUDIO_WRITE_MS = 250L
 
     private val lock = Any()
@@ -32,6 +32,8 @@ object AaProjectionSink : SurfaceHolder.Callback {
     private var audioTrack: AudioTrack? = null
     private var videoWorker: Thread? = null
     private val videoQueue = ArrayDeque<VideoFrame>()
+    private var videoNeedsKeyFrame = true
+    private var videoRecoveryDrops = 0L
     @Volatile
     private var videoWorkerRunning = false
     private var audioWorker: Thread? = null
@@ -107,14 +109,35 @@ object AaProjectionSink : SurfaceHolder.Callback {
     @JvmStatic
     fun nativePushVideo(data: ByteArray, ptsUs: Long) {
         val frame = VideoFrame(data, ptsUs)
+        val isIdr = isIdrFrame(frame.data)
+        val isConfig = isAvcConfigFrame(frame.data)
         synchronized(videoQueueLock) {
             if (!videoWorkerRunning) {
                 return
             }
+            if (videoNeedsKeyFrame) {
+                if (!isIdr && !isConfig) {
+                    return
+                }
+                videoQueue.addLast(frame)
+                if (isIdr) {
+                    videoNeedsKeyFrame = false
+                }
+                videoQueueLock.notifyAll()
+                return
+            }
             if (videoQueue.size >= MAX_VIDEO_QUEUE_FRAMES) {
-                if (isIdrFrame(frame.data)) {
+                if (isIdr) {
                     videoQueue.clear()
                 } else {
+                    videoQueue.clear()
+                    videoNeedsKeyFrame = true
+                    videoRecoveryDrops += 1
+                    if (videoRecoveryDrops <= 3 || videoRecoveryDrops % 25L == 0L) {
+                        AasdkNative.nativeReportProjectionStats(
+                            "video queue overflow; waiting for next IDR count=$videoRecoveryDrops"
+                        )
+                    }
                     return
                 }
             }
@@ -199,6 +222,11 @@ object AaProjectionSink : SurfaceHolder.Callback {
         if (videoWorkerRunning) {
             return
         }
+        synchronized(videoQueueLock) {
+            videoQueue.clear()
+            videoNeedsKeyFrame = true
+            videoRecoveryDrops = 0
+        }
         videoWorkerRunning = true
         videoWorker = thread(name = "aa-video-decode", start = true) {
             try {
@@ -210,7 +238,7 @@ object AaProjectionSink : SurfaceHolder.Callback {
                         if (!videoWorkerRunning) {
                             return@thread
                         }
-                        videoQueue.removeLast().also { videoQueue.clear() }
+                        videoQueue.removeFirst()
                     }
                     val codec = synchronized(lock) { videoCodec } ?: continue
                     var inputIndex = codec.dequeueInputBuffer(INPUT_TIMEOUT_US)
@@ -238,6 +266,8 @@ object AaProjectionSink : SurfaceHolder.Callback {
         videoWorkerRunning = false
         synchronized(videoQueueLock) {
             videoQueue.clear()
+            videoNeedsKeyFrame = true
+            videoRecoveryDrops = 0
             videoQueueLock.notifyAll()
         }
         videoWorker?.interrupt()
@@ -360,7 +390,16 @@ object AaProjectionSink : SurfaceHolder.Callback {
     }
 
     private fun isIdrFrame(data: ByteArray): Boolean {
+        return hasNalType(data, 5)
+    }
+
+    private fun isAvcConfigFrame(data: ByteArray): Boolean {
+        return hasNalType(data, 7, 8)
+    }
+
+    private fun hasNalType(data: ByteArray, vararg wantedTypes: Int): Boolean {
         var index = 0
+        var foundStartCode = false
         while (index + 4 < data.size) {
             val start = when {
                 data[index] == 0.toByte() &&
@@ -376,11 +415,16 @@ object AaProjectionSink : SurfaceHolder.Callback {
                     continue
                 }
             }
+            foundStartCode = true
             val nalType = data[start].toInt() and 0x1F
-            if (nalType == 5) {
+            if (wantedTypes.contains(nalType)) {
                 return true
             }
             index = start + 1
+        }
+        if (!foundStartCode && data.isNotEmpty()) {
+            val nalType = data[0].toInt() and 0x1F
+            return wantedTypes.contains(nalType)
         }
         return false
     }
