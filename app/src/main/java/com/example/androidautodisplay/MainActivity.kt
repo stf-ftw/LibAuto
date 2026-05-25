@@ -1625,7 +1625,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 val slot = firstFreeTouchSlot() ?: return
                 touchPointerSlots[event.getPointerId(event.actionIndex)] = slot
-                5
+                0
             }
             MotionEvent.ACTION_UP,
             MotionEvent.ACTION_CANCEL -> {
@@ -1639,7 +1639,7 @@ class MainActivity : AppCompatActivity() {
                 if (!touchActive) {
                     return
                 }
-                6
+                1
             }
             MotionEvent.ACTION_MOVE -> {
                 if (!touchActive) {
@@ -1649,8 +1649,15 @@ class MainActivity : AppCompatActivity() {
             }
             else -> return
         }
-        val points = collectTouchPoints(event)
+        val points = collectTouchPoints(event).ifEmpty {
+            if (action == 1) lastKnownTouchPoints() else emptyList()
+        }
         if (points.isEmpty()) {
+            if (actionMasked == MotionEvent.ACTION_UP || actionMasked == MotionEvent.ACTION_CANCEL) {
+                touchActive = false
+                touchPointerSlots.clear()
+                resetTouchMovement()
+            }
             return
         }
         if (action == 2 && shouldDropTouchMove(points)) {
@@ -1726,7 +1733,8 @@ class MainActivity : AppCompatActivity() {
         if (isStationaryTouchMove(points)) {
             return true
         }
-        if (lastTouchMoveMs != 0L && now - lastTouchMoveMs < TOUCH_MOVE_INTERVAL_MS) {
+        val interval = if (points.size > 1) TOUCH_MULTI_MOVE_INTERVAL_MS else TOUCH_MOVE_INTERVAL_MS
+        if (lastTouchMoveMs != 0L && now - lastTouchMoveMs < interval) {
             return true
         }
         lastTouchMoveMs = now
@@ -1759,6 +1767,17 @@ class MainActivity : AppCompatActivity() {
         lastTouchSecondX = secondary?.x ?: -1
         lastTouchSecondY = secondary?.y ?: -1
         lastTouchPointCount = points.size
+    }
+
+    private fun lastKnownTouchPoints(): List<TouchPoint> {
+        if (lastTouchX < 0 || lastTouchY < 0) {
+            return emptyList()
+        }
+        val points = mutableListOf(TouchPoint(0, lastTouchX, lastTouchY))
+        if (lastTouchPointCount > 1 && lastTouchSecondX >= 0 && lastTouchSecondY >= 0) {
+            points += TouchPoint(1, lastTouchSecondX, lastTouchSecondY)
+        }
+        return points
     }
 
     private fun resetTouchMovement() {
@@ -1971,7 +1990,8 @@ class MainActivity : AppCompatActivity() {
         const val AA_KEYCODE_MEDIA_PREVIOUS = 88
         const val AA_KEYCODE_MEDIA_PLAY = 126
         const val AA_KEYCODE_MEDIA_PAUSE = 127
-        const val TOUCH_MOVE_INTERVAL_MS = 16L
-        const val TOUCH_MOVE_DEAD_ZONE_PX = 2
+        const val TOUCH_MOVE_INTERVAL_MS = 24L
+        const val TOUCH_MULTI_MOVE_INTERVAL_MS = 40L
+        const val TOUCH_MOVE_DEAD_ZONE_PX = 3
     }
 }

@@ -152,8 +152,12 @@ class WirelessAaController(
             running.set(false)
             return
         }
-        startBleGattServer()
-        startBleAdvertising(adapter)
+        if (startBleGattServer()) {
+            startBleAdvertising(adapter)
+        } else {
+            bleAdvertiseBroken = true
+            logger("Wireless BLE advertise skipped: GATT server unavailable")
+        }
         for (endpoint in AA_WIRELESS_ENDPOINTS) {
             val worker = Thread({
                 listenForBluetoothClient(adapter, endpoint, ssid, password, bssid, port, dynamicAp)
@@ -226,13 +230,13 @@ class WirelessAaController(
     }
 
     @SuppressLint("MissingPermission")
-    private fun startBleGattServer() {
+    private fun startBleGattServer(): Boolean {
         if (!hasBluetoothPermission()) {
             logger("Wireless BLE GATT skipped: Bluetooth permission missing")
-            return
+            return false
         }
         if (gattServer != null) {
-            return
+            return true
         }
         try {
             val server = bluetoothManager.openGattServer(appContext, object : BluetoothGattServerCallback() {
@@ -279,7 +283,7 @@ class WirelessAaController(
                 }
             }) ?: run {
                 logger("Wireless BLE GATT unavailable")
-                return
+                return false
             }
             gattServer = server
             for (endpoint in AA_BLE_ENDPOINTS) {
@@ -297,10 +301,12 @@ class WirelessAaController(
                 server.addService(service)
             }
             logger("Wireless BLE GATT server started")
+            return true
         } catch (ex: Exception) {
             LogFileHelper.appendException(appContext, "Wireless BLE GATT start failed", ex)
             logger("Wireless BLE GATT start failed: ${ex.message}")
             stopBleGattServer()
+            return false
         }
     }
 
