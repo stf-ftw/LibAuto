@@ -662,8 +662,11 @@ uint64_t monotonicMicros() {
 proto::enums::TouchAction_Enum toTouchAction(int32_t action) {
     switch (action) {
         case 0:
+        case 5:
             return proto::enums::TouchAction_Enum_PRESS;
         case 1:
+        case 3:
+        case 6:
             return proto::enums::TouchAction_Enum_RELEASE;
         case 2:
         default:

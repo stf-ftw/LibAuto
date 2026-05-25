@@ -19,7 +19,7 @@ object AaProjectionSink : SurfaceHolder.Callback {
     private const val INPUT_TIMEOUT_US = 0L
     private const val MAX_AUDIO_BUFFER_DURATION_MS = 500
     private const val MIN_AUDIO_QUEUE_BYTES = 32 * 1024
-    private const val MAX_VIDEO_QUEUE_FRAMES = 2
+    private const val MAX_VIDEO_QUEUE_FRAMES = 6
     private const val SLOW_AUDIO_WRITE_MS = 250L
 
     private val lock = Any()
@@ -112,7 +112,11 @@ object AaProjectionSink : SurfaceHolder.Callback {
                 return
             }
             if (videoQueue.size >= MAX_VIDEO_QUEUE_FRAMES) {
-                videoQueue.clear()
+                if (isIdrFrame(frame.data)) {
+                    videoQueue.clear()
+                } else {
+                    return
+                }
             }
             videoQueue.addLast(frame)
             videoQueueLock.notifyAll()
@@ -353,6 +357,32 @@ object AaProjectionSink : SurfaceHolder.Callback {
         }
         val prefix = byteArrayOf(0x00, 0x00, 0x00, 0x01)
         return prefix + data
+    }
+
+    private fun isIdrFrame(data: ByteArray): Boolean {
+        var index = 0
+        while (index + 4 < data.size) {
+            val start = when {
+                data[index] == 0.toByte() &&
+                    data[index + 1] == 0.toByte() &&
+                    data[index + 2] == 1.toByte() -> index + 3
+                index + 5 < data.size &&
+                    data[index] == 0.toByte() &&
+                    data[index + 1] == 0.toByte() &&
+                    data[index + 2] == 0.toByte() &&
+                    data[index + 3] == 1.toByte() -> index + 4
+                else -> {
+                    index += 1
+                    continue
+                }
+            }
+            val nalType = data[start].toInt() and 0x1F
+            if (nalType == 5) {
+                return true
+            }
+            index = start + 1
+        }
+        return false
     }
 
     private fun drainVideoCodec(codec: MediaCodec) {
