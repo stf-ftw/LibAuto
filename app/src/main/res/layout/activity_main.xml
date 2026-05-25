@@ -146,13 +146,13 @@
                 </LinearLayout>
 
                 <LinearLayout
+                    android:id="@+id/usb_devices_card"
                     android:layout_width="560dp"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="16dp"
                     android:background="@drawable/card_bg"
                     android:orientation="vertical"
-                    android:padding="16dp"
-                    android:visibility="gone">
+                    android:padding="16dp">
 
                     <TextView
                         android:layout_width="wrap_content"
@@ -194,12 +194,14 @@
                     android:textSize="12sp" />
 
                 <LinearLayout
+                    android:id="@+id/wireless_card"
                     android:layout_width="560dp"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="16dp"
                     android:background="@drawable/card_bg"
                     android:orientation="vertical"
-                    android:padding="16dp">
+                    android:padding="16dp"
+                    android:visibility="gone">
 
                     <TextView
                         android:layout_width="wrap_content"
