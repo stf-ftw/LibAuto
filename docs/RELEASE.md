@@ -62,5 +62,4 @@ If it does not install or crashes immediately on an older/Chinese Android head u
 ## Notes
 
 - Persistent logs are size-capped under `Android/data/ro.stf_ftw.libauto/files/LibAutoLogs/` to avoid unbounded NAND writes.
-- Play Store acceptance is not guaranteed; Android Auto/head-unit apps can be sensitive to policy, certification, and trademark review.
 - LibAuto is not affiliated with or endorsed by Google, Android Auto, or any vehicle/head-unit vendor.
