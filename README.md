@@ -131,7 +131,7 @@ For current Google Play submissions, Google’s [target API requirement](https:/
 - `app/`: Android application, UI, projection service, USB manager, media decode/playback, permissions, sensors, and logging.
 - `native/`: JNI bridge and Android USB transport used by AASDK.
 - `third_party/aasdk-2.1/`: vendored AASDK source used for Android Auto protocol/channel handling.
-- `docs/`: screenshots, technical notes, and credits.
+- `docs/`: screenshots, release notes, and credits.
 - `scripts/`: helper scripts for release packaging.
 
 ## Important Limitations
@@ -144,7 +144,6 @@ For current Google Play submissions, Google’s [target API requirement](https:/
 
 ## Documentation
 
-- [Technical Notes](docs/TECHNICAL_NOTES.md) documents the major implementation changes and why they were made.
 - [Credits](docs/CREDITS.md) lists project dependencies, research references, and attribution notes.
 - [Release Notes](docs/RELEASE.md) documents release flavor outputs and verification commands.
 
