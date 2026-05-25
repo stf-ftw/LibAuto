@@ -102,8 +102,8 @@ constexpr int kAudioInputChannels = 1;
 constexpr int kAudioBitDepth = 16;
 constexpr uint32_t kMaxUnacked = 1;
 constexpr uint32_t kMediaAudioMaxUnacked = 4;
-constexpr int32_t kMaxTouchInFlight = 1;
-constexpr int32_t kMaxTouchHardLimit = 3;
+constexpr int32_t kMaxTouchInFlight = 2;
+constexpr int32_t kMaxTouchHardLimit = 6;
 constexpr std::array<uint32_t, 16> kSupportedButtonCodes = {
     static_cast<uint32_t>(proto::enums::ButtonCode::MENU),
     static_cast<uint32_t>(proto::enums::ButtonCode::HOME),
@@ -711,7 +711,8 @@ void sendTouchEventMulti(
         touch->set_action_index(static_cast<uint32_t>(
             std::clamp(action_index, 0, static_cast<int32_t>(points.size() - 1))
         ));
-        touch->set_touch_action(toTouchAction(action));
+        // AA expects raw Android pointer actions for multi-touch gestures.
+        touch->set_touch_action(static_cast<proto::enums::TouchAction_Enum>(action));
         const auto config = currentVideoConfig();
         for (const auto& point : points) {
             auto* location = touch->add_touch_location();

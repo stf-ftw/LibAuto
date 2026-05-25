@@ -43,5 +43,5 @@ private:
 
     static constexpr int kReadTimeoutMs = 200;
     static constexpr int kWriteTimeoutMs = 250;
-    static constexpr int kIdleDisconnectMs = 5000;
+    static constexpr int kIdleDisconnectMs = 1500;
 };
