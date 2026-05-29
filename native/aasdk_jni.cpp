@@ -105,8 +105,8 @@ constexpr int kAudioSinkSystem = 2;
 constexpr int kAudioBitDepth = 16;
 constexpr uint32_t kMaxUnacked = 1;
 constexpr uint32_t kMediaAudioMaxUnacked = 4;
-constexpr int32_t kMaxTouchInFlight = 2;
-constexpr int32_t kMaxTouchHardLimit = 6;
+constexpr int32_t kMaxTouchInFlight = 8;
+constexpr int32_t kMaxTouchHardLimit = 16;
 constexpr std::array<uint32_t, 19> kSupportedButtonCodes = {
     static_cast<uint32_t>(proto::enums::ButtonCode::MENU),
     static_cast<uint32_t>(proto::enums::ButtonCode::HOME),

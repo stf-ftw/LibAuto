@@ -19,6 +19,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 
 class ProjectionService : Service() {
     private lateinit var sessionController: SessionController
@@ -36,6 +37,7 @@ class ProjectionService : Service() {
     private var lastBytesOut = 0L
     private var aaStarted = false
     private var aaStartInProgress = false
+    private val nativeStopInProgress = AtomicBoolean(false)
     private val mainHandler = Handler(Looper.getMainLooper())
     private val usbPermissionReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -113,9 +115,9 @@ class ProjectionService : Service() {
                         aaStartInProgress = false
                     }
                     CarSensorBridge.stop()
-                    AasdkNative.nativeStopAaSession()
                     appendUsbLog("AASDK session reset after USB close")
                 }
+                stopAaSessionAsync("usb-close")
             }
         )
         wirelessController = WirelessAaController(this) { message ->
@@ -156,6 +158,7 @@ class ProjectionService : Service() {
             Constants.ACTION_STOP -> {
                 sessionController.stop()
                 wirelessController.stop()
+                stopAaSessionAsync("service-stop")
                 projectionRunning = false
                 maybeStopService()
             }
@@ -171,6 +174,7 @@ class ProjectionService : Service() {
             Constants.ACTION_WIRELESS_STOP -> {
                 appendUsbLog("Wireless AA stop requested")
                 wirelessController.stop()
+                stopAaSessionAsync("wireless-stop")
                 CarSensorBridge.stop()
                 projectionRunning = false
                 maybeStopService()
@@ -588,9 +592,29 @@ class ProjectionService : Service() {
             }
             CarSensorBridge.stop()
             usbController.handleDeviceDetached(device)
+            stopAaSessionAsync("usb-detached")
         } else if (event == Constants.USB_PERMISSION && device != null) {
             val granted = intent.getBooleanExtra(Constants.EXTRA_USB_PERMISSION_GRANTED, false)
             usbController.handlePermissionResult(device, granted)
+        }
+    }
+
+    private fun stopAaSessionAsync(reason: String) {
+        if (!nativeStopInProgress.compareAndSet(false, true)) {
+            appendUsbLog("AASDK native stop already running ($reason)")
+            return
+        }
+        Thread({
+            try {
+                LogFileHelper.appendEvent(this, "ProjectionService", "nativeStopAaSession begin reason=$reason")
+                AasdkNative.nativeStopAaSession()
+                LogFileHelper.appendEvent(this, "ProjectionService", "nativeStopAaSession end reason=$reason")
+            } finally {
+                nativeStopInProgress.set(false)
+            }
+        }, "libauto-aa-stop").apply {
+            isDaemon = true
+            start()
         }
     }
 
@@ -608,6 +632,7 @@ class ProjectionService : Service() {
             wirelessController.stop()
         }
         CarSensorBridge.stop()
+        stopAaSessionAsync("service-destroy")
         usbController.stopMonitoring()
         super.onDestroy()
     }
