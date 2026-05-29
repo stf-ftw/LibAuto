@@ -627,7 +627,7 @@ object AaProjectionSink : SurfaceHolder.Callback {
             while (offset < data.size && running) {
                 val beforeMs = SystemClock.elapsedRealtime()
                 val written = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    activeTrack.write(data, offset, data.size - offset, AudioTrack.WRITE_BLOCKING)
+                    activeTrack.write(data, offset, data.size - offset, AudioTrack.WRITE_NON_BLOCKING)
                 } else {
                     activeTrack.write(data, offset, data.size - offset)
                 }
@@ -635,7 +635,7 @@ object AaProjectionSink : SurfaceHolder.Callback {
                 if (written <= 0) {
                     synchronized(queueLock) {
                         writeShorts++
-                        reportStatsLocked("write_error_$written")
+                        reportStatsLocked(if (written == 0) "write_backpressure" else "write_error_$written")
                     }
                     break
                 }

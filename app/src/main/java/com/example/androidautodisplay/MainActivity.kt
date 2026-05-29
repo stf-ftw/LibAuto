@@ -37,6 +37,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import java.util.Locale
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.roundToInt
 
 class MainActivity : AppCompatActivity() {
@@ -153,6 +155,11 @@ class MainActivity : AppCompatActivity() {
     private var touchMoveScheduled = false
     private var pendingTouchMove: PendingTouchMove? = null
     private val touchPointerSlots = mutableMapOf<Int, Int>()
+    private val touchSendExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "aa-touch-send").apply { isDaemon = true }
+    }
+    private val touchSendsInFlight = AtomicInteger(0)
+    private var droppedTouchMoveSends = 0L
     private val prefs by lazy { getSharedPreferences("transport_prefs", MODE_PRIVATE) }
     private val aoapPrefs by lazy { getSharedPreferences(Constants.AOAP_PREFS, MODE_PRIVATE) }
     private val projectionPrefs by lazy { getSharedPreferences(Constants.PROJECTION_PREFS, MODE_PRIVATE) }
@@ -729,6 +736,7 @@ class MainActivity : AppCompatActivity() {
         AaProjectionSink.release()
         mediaSession?.release()
         mediaSession = null
+        touchSendExecutor.shutdownNow()
     }
 
     private fun updateWifiStatus() {
@@ -878,7 +886,7 @@ class MainActivity : AppCompatActivity() {
                 projectionFrameWidth <= 0 || projectionFrameHeight <= 0) {
                 return@post
             }
-            val videoAspect = projectionFrameWidth.toFloat() / projectionFrameHeight.toFloat()
+            val videoAspect = projectionVideoWidth.toFloat() / projectionVideoHeight.toFloat()
             val containerAspect = containerWidth.toFloat() / containerHeight.toFloat()
             val (viewportWidth, viewportHeight) = if (containerAspect > videoAspect) {
                 val height = containerHeight
@@ -892,16 +900,28 @@ class MainActivity : AppCompatActivity() {
                 viewportHeight,
                 Gravity.CENTER
             )
+            val surfaceWidth = ((viewportWidth.toFloat() * projectionFrameWidth.toFloat()) /
+                projectionVideoWidth.toFloat()).roundToInt().coerceAtLeast(1)
+            val surfaceHeight = ((viewportHeight.toFloat() * projectionFrameHeight.toFloat()) /
+                projectionVideoHeight.toFloat()).roundToInt().coerceAtLeast(1)
+            val surfaceLeftMargin = -((surfaceWidth.toFloat() * (projectionMarginWidth.toFloat() / 2f)) /
+                projectionFrameWidth.toFloat()).roundToInt()
+            val surfaceTopMargin = -((surfaceHeight.toFloat() * (projectionMarginHeight.toFloat() / 2f)) /
+                projectionFrameHeight.toFloat()).roundToInt()
             videoSurface.layoutParams = FrameLayout.LayoutParams(
-                viewportWidth,
-                viewportHeight,
-                Gravity.CENTER
-            )
+                surfaceWidth,
+                surfaceHeight,
+                Gravity.TOP or Gravity.START
+            ).apply {
+                leftMargin = surfaceLeftMargin
+                topMargin = surfaceTopMargin
+            }
             projectionStatus.bringToFront()
             videoSurface.holder.setFixedSize(projectionFrameWidth, projectionFrameHeight)
             val signature = "container=${containerWidth}x$containerHeight viewport=${viewportWidth}x$viewportHeight " +
-                "surface=${viewportWidth}x$viewportHeight holder=${projectionFrameWidth}x$projectionFrameHeight " +
-                "active=${projectionVideoWidth}x$projectionVideoHeight margins=${projectionMarginWidth}x$projectionMarginHeight"
+                "surface=${surfaceWidth}x$surfaceHeight offset=${surfaceLeftMargin}x$surfaceTopMargin " +
+                "holder=${projectionFrameWidth}x$projectionFrameHeight active=${projectionVideoWidth}x$projectionVideoHeight " +
+                "margins=${projectionMarginWidth}x$projectionMarginHeight"
             if (signature != lastVideoLayoutSignature) {
                 lastVideoLayoutSignature = signature
                 AasdkNative.nativeReportProjectionStats("video surface layout $signature")
@@ -1741,17 +1761,56 @@ class MainActivity : AppCompatActivity() {
     private fun sendTouchPoints(action: Int, actionIndex: Int, points: List<TouchPoint>) {
         val p0 = points.getOrNull(0)
         val p1 = points.getOrNull(1)
-        AasdkNative.nativeSendTouchMulti(
-            action,
-            actionIndex,
-            points.size,
-            p0?.x ?: 0,
-            p0?.y ?: 0,
-            (p0?.slot ?: 0) + 1,
-            p1?.x ?: 0,
-            p1?.y ?: 0,
-            (p1?.slot ?: 1) + 1
+        queueAaTouchSend(
+            action = action,
+            actionIndex = actionIndex,
+            pointerCount = points.size,
+            x0 = p0?.x ?: 0,
+            y0 = p0?.y ?: 0,
+            pointerId0 = (p0?.slot ?: 0) + 1,
+            x1 = p1?.x ?: 0,
+            y1 = p1?.y ?: 0,
+            pointerId1 = (p1?.slot ?: 1) + 1
         )
+    }
+
+    private fun queueAaTouchSend(
+        action: Int,
+        actionIndex: Int,
+        pointerCount: Int,
+        x0: Int,
+        y0: Int,
+        pointerId0: Int,
+        x1: Int,
+        y1: Int,
+        pointerId1: Int
+    ) {
+        val inFlight = touchSendsInFlight.get()
+        if (action == MotionEvent.ACTION_MOVE && inFlight >= MAX_TOUCH_SENDS_IN_FLIGHT) {
+            droppedTouchMoveSends += 1
+            if (droppedTouchMoveSends <= 3 || droppedTouchMoveSends % 100L == 0L) {
+                AasdkNative.nativeReportProjectionStats("touch move dropped inFlight=$inFlight count=$droppedTouchMoveSends")
+            }
+            return
+        }
+        touchSendsInFlight.incrementAndGet()
+        touchSendExecutor.execute {
+            try {
+                AasdkNative.nativeSendTouchMulti(
+                    action,
+                    actionIndex,
+                    pointerCount,
+                    x0,
+                    y0,
+                    pointerId0,
+                    x1,
+                    y1,
+                    pointerId1
+                )
+            } finally {
+                touchSendsInFlight.decrementAndGet()
+            }
+        }
     }
 
     private data class PendingTouchMove(val actionIndex: Int, val points: List<TouchPoint>)
@@ -2095,7 +2154,8 @@ class MainActivity : AppCompatActivity() {
         const val AA_KEYCODE_MEDIA_PAUSE = 127
         const val AA_KEYCODE_MEDIA_STOP = 86
         const val TOUCH_MOVE_INTERVAL_MS = 24L
-        const val TOUCH_MULTI_MOVE_INTERVAL_MS = 40L
+        const val TOUCH_MULTI_MOVE_INTERVAL_MS = 20L
         const val TOUCH_MOVE_DEAD_ZONE_PX = 3
+        const val MAX_TOUCH_SENDS_IN_FLIGHT = 3
     }
 }
