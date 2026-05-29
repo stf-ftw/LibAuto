@@ -99,6 +99,9 @@ constexpr int kSystemAudioSampleRate = 16000;
 constexpr int kSystemAudioChannels = 1;
 constexpr int kAudioInputSampleRate = 16000;
 constexpr int kAudioInputChannels = 1;
+constexpr int kAudioSinkMedia = 0;
+constexpr int kAudioSinkSpeech = 1;
+constexpr int kAudioSinkSystem = 2;
 constexpr int kAudioBitDepth = 16;
 constexpr uint32_t kMaxUnacked = 1;
 constexpr uint32_t kMediaAudioMaxUnacked = 4;
@@ -218,9 +221,9 @@ bool ensureProjectionSink(JNIEnv* env) {
     g_configure_video = env->GetStaticMethodID(g_projection_sink_class, "nativeConfigureVideo", "(II)V");
     g_stop_video = env->GetStaticMethodID(g_projection_sink_class, "nativeStopVideo", "()V");
     g_push_video = env->GetStaticMethodID(g_projection_sink_class, "nativePushVideo", "([BJ)V");
-    g_configure_audio = env->GetStaticMethodID(g_projection_sink_class, "nativeConfigureAudio", "(II)V");
-    g_stop_audio = env->GetStaticMethodID(g_projection_sink_class, "nativeStopAudio", "()V");
-    g_push_audio = env->GetStaticMethodID(g_projection_sink_class, "nativePushAudio", "([BJ)V");
+    g_configure_audio = env->GetStaticMethodID(g_projection_sink_class, "nativeConfigureAudio", "(III)V");
+    g_stop_audio = env->GetStaticMethodID(g_projection_sink_class, "nativeStopAudio", "(I)V");
+    g_push_audio = env->GetStaticMethodID(g_projection_sink_class, "nativePushAudio", "(I[BJ)V");
     return g_configure_video != nullptr &&
            g_stop_video != nullptr &&
            g_push_video != nullptr &&
@@ -348,7 +351,7 @@ void pushVideoFrame(const common::DataConstBuffer& payload, int64_t pts_us) {
     }
 }
 
-void configureAudioSink(int sample_rate, int channel_count) {
+void configureAudioSink(int sink_id, int sample_rate, int channel_count) {
     std::lock_guard<std::mutex> lock(g_jni_mutex);
     auto holder = getEnv();
     if (holder.env == nullptr || !ensureProjectionSink(holder.env)) {
@@ -357,6 +360,7 @@ void configureAudioSink(int sample_rate, int channel_count) {
     holder.env->CallStaticVoidMethod(
         g_projection_sink_class,
         g_configure_audio,
+        sink_id,
         sample_rate,
         channel_count
     );
@@ -366,13 +370,13 @@ void configureAudioSink(int sample_rate, int channel_count) {
     }
 }
 
-void stopAudioSink() {
+void stopAudioSink(int sink_id) {
     std::lock_guard<std::mutex> lock(g_jni_mutex);
     auto holder = getEnv();
     if (holder.env == nullptr || !ensureProjectionSink(holder.env)) {
         return;
     }
-    holder.env->CallStaticVoidMethod(g_projection_sink_class, g_stop_audio);
+    holder.env->CallStaticVoidMethod(g_projection_sink_class, g_stop_audio, sink_id);
     native_log::LogJniException(holder.env, "nativeStopAudio");
     if (holder.attached) {
         g_vm->DetachCurrentThread();
@@ -458,7 +462,7 @@ bool isPhoneBluetoothPaired(const std::string& phone_address) {
     return paired == JNI_TRUE;
 }
 
-void pushAudioFrame(const common::DataConstBuffer& payload, int64_t pts_us) {
+void pushAudioFrame(int sink_id, const common::DataConstBuffer& payload, int64_t pts_us) {
     auto holder = getEnv();
     if (holder.env == nullptr || !ensureProjectionSink(holder.env)) {
         return;
@@ -470,7 +474,7 @@ void pushAudioFrame(const common::DataConstBuffer& payload, int64_t pts_us) {
         static_cast<jsize>(payload.size),
         reinterpret_cast<const jbyte*>(payload.cdata)
     );
-    holder.env->CallStaticVoidMethod(g_projection_sink_class, g_push_audio, arr, static_cast<jlong>(pts_us));
+    holder.env->CallStaticVoidMethod(g_projection_sink_class, g_push_audio, sink_id, arr, static_cast<jlong>(pts_us));
     holder.env->DeleteLocalRef(arr);
     native_log::LogJniException(holder.env, "nativePushAudio");
     if (holder.attached) {
@@ -1022,12 +1026,14 @@ public:
         std::weak_ptr<channel::av::AudioServiceChannel> channel,
         boost::asio::io_service::strand& strand,
         std::string label,
+        int sink_id,
         bool render_to_sink,
         AudioConfigInfo config,
         uint32_t max_unacked = kMaxUnacked)
         : channel_(std::move(channel)),
           strand_(strand),
           label_(std::move(label)),
+          sink_id_(sink_id),
           render_to_sink_(render_to_sink),
           config_(config),
           max_unacked_(max_unacked) {}
@@ -1054,7 +1060,7 @@ public:
         active_session_ = -1;
         pending_ack_count_ = 0;
         if (render_to_sink_) {
-            configureAudioSink(config_.sample_rate, config_.channel_count);
+            configureAudioSink(sink_id_, config_.sample_rate, config_.channel_count);
         }
         if (auto channel = channel_.lock()) {
             auto promise = channel::SendPromise::defer(strand_);
@@ -1076,7 +1082,7 @@ public:
                          label_.c_str(), indication.session(), indication.config());
         active_session_ = indication.session();
         if (render_to_sink_) {
-            configureAudioSink(config_.sample_rate, config_.channel_count);
+            configureAudioSink(sink_id_, config_.sample_rate, config_.channel_count);
         }
         receiveAgain();
     }
@@ -1086,7 +1092,7 @@ public:
         flushPendingAck();
         active_session_ = -1;
         if (render_to_sink_) {
-            stopAudioSink();
+            stopAudioSink(sink_id_);
         }
         receiveAgain();
     }
@@ -1095,7 +1101,7 @@ public:
                                           const common::DataConstBuffer& buffer) override {
         recordMediaPacket(buffer.size);
         if (render_to_sink_) {
-            pushAudioFrame(buffer, static_cast<int64_t>(ts));
+            pushAudioFrame(sink_id_, buffer, static_cast<int64_t>(ts));
         }
         sendAck();
     }
@@ -1103,7 +1109,7 @@ public:
     void onAVMediaIndication(const common::DataConstBuffer& buffer) override {
         recordMediaPacket(buffer.size);
         if (render_to_sink_) {
-            pushAudioFrame(buffer, 0);
+            pushAudioFrame(sink_id_, buffer, 0);
         }
         sendAck();
     }
@@ -1118,7 +1124,7 @@ public:
                          label_.c_str(), static_cast<int>(e.getCode()), e.getNativeCode());
         active_session_ = -1;
         if (render_to_sink_) {
-            stopAudioSink();
+            stopAudioSink(sink_id_);
         }
     }
 
@@ -1199,6 +1205,7 @@ private:
     std::weak_ptr<channel::av::AudioServiceChannel> channel_;
     boost::asio::io_service::strand& strand_;
     std::string label_;
+    int sink_id_ = kAudioSinkMedia;
     bool render_to_sink_ = false;
     AudioConfigInfo config_;
     uint32_t max_unacked_ = kMaxUnacked;
@@ -1974,11 +1981,11 @@ bool startAaSessionWithTransport(
 
     session->video_handler = std::make_shared<AndroidVideoHandler>(session->video, session->strand);
     session->media_audio_handler = std::make_shared<AndroidAudioHandler>(
-        session->media_audio, session->strand, "media audio", true, kMediaAudioConfig, kMediaAudioMaxUnacked);
+        session->media_audio, session->strand, "media audio", kAudioSinkMedia, true, kMediaAudioConfig, kMediaAudioMaxUnacked);
     session->speech_audio_handler = std::make_shared<AndroidAudioHandler>(
-        session->speech_audio, session->strand, "speech audio", true, kSpeechAudioConfig);
+        session->speech_audio, session->strand, "speech audio", kAudioSinkSpeech, true, kSpeechAudioConfig);
     session->system_audio_handler = std::make_shared<AndroidAudioHandler>(
-        session->system_audio, session->strand, "system audio", true, kSystemAudioConfig);
+        session->system_audio, session->strand, "system audio", kAudioSinkSystem, true, kSystemAudioConfig);
     session->av_input_handler = std::make_shared<AndroidAudioInputHandler>(
         session->av_input, session->strand);
     session->input_handler = std::make_shared<AndroidInputHandler>(session->input, session->strand);
@@ -2155,7 +2162,9 @@ void stopAaSession() {
     g_video_frame_count.store(0);
     g_touch_in_flight.store(0);
     stopVideoSink();
-    stopAudioSink();
+    stopAudioSink(kAudioSinkMedia);
+    stopAudioSink(kAudioSinkSpeech);
+    stopAudioSink(kAudioSinkSystem);
     stopMicInput();
     session->transport->stop();
     session->io.stop();

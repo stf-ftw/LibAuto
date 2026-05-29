@@ -21,38 +21,30 @@ object AaProjectionSink : SurfaceHolder.Callback {
     private const val MIN_AUDIO_QUEUE_BYTES = 32 * 1024
     private const val MAX_VIDEO_QUEUE_FRAMES = 8
     private const val SLOW_AUDIO_WRITE_MS = 250L
+    private const val AUDIO_STREAM_MEDIA = 0
+    private const val AUDIO_STREAM_SPEECH = 1
+    private const val AUDIO_STREAM_SYSTEM = 2
 
     private val lock = Any()
-    private val audioQueueLock = Object()
     private val videoQueueLock = Object()
 
     private var surfaceHolder: SurfaceHolder? = null
     private var surface: Surface? = null
     private var videoCodec: MediaCodec? = null
-    private var audioTrack: AudioTrack? = null
     private var videoWorker: Thread? = null
     private val videoQueue = ArrayDeque<VideoFrame>()
     private var videoNeedsKeyFrame = true
     private var videoRecoveryDrops = 0L
     @Volatile
     private var videoWorkerRunning = false
-    private var audioWorker: Thread? = null
-    private val audioQueue = ArrayDeque<ByteArray>()
-    private var queuedAudioBytes = 0
-    private var audioInFrames = 0L
-    private var audioInBytes = 0L
-    private var audioDroppedFrames = 0L
-    private var audioDroppedBytes = 0L
-    private var audioWrittenBytes = 0L
-    private var audioWriteShorts = 0L
-    private var lastAudioStatsLogMs = 0L
-    @Volatile
-    private var audioWorkerRunning = false
+    private val audioRenderers = arrayOf(
+        AudioRenderer(AUDIO_STREAM_MEDIA, "media"),
+        AudioRenderer(AUDIO_STREAM_SPEECH, "speech"),
+        AudioRenderer(AUDIO_STREAM_SYSTEM, "system")
+    )
 
     private var configuredVideoWidth = 0
     private var configuredVideoHeight = 0
-    private var configuredAudioSampleRate = 0
-    private var configuredAudioChannels = 0
 
     private data class VideoFrame(
         val data: ByteArray,
@@ -147,75 +139,19 @@ object AaProjectionSink : SurfaceHolder.Callback {
     }
 
     @JvmStatic
-    fun nativeConfigureAudio(sampleRate: Int, channelCount: Int) {
-        synchronized(lock) {
-            configuredAudioSampleRate = sampleRate
-            configuredAudioChannels = channelCount
-            ensureAudioTrackLocked()
-        }
+    fun nativeConfigureAudio(streamId: Int, sampleRate: Int, channelCount: Int) {
+        audioRenderer(streamId)?.configure(sampleRate, channelCount)
     }
 
     @JvmStatic
-    fun nativeStopAudio() {
-        synchronized(lock) {
-            stopAudioLocked()
-        }
+    fun nativeStopAudio(streamId: Int) {
+        audioRenderer(streamId)?.stop()
     }
 
     @JvmStatic
-    fun nativePushAudio(data: ByteArray, ptsUs: Long) {
-        val frame = data
-        synchronized(audioQueueLock) {
-            if (!audioWorkerRunning) {
-                return
-            }
-            val maxQueueBytes = maxAudioQueueBytesLocked()
-            if (queuedAudioBytes + frame.size > maxQueueBytes) {
-                while (audioQueue.isNotEmpty() && queuedAudioBytes + frame.size > maxQueueBytes) {
-                    val dropped = audioQueue.removeFirst()
-                    queuedAudioBytes -= dropped.size
-                    audioDroppedFrames++
-                    audioDroppedBytes += dropped.size
-                }
-                reportAudioStatsLocked("drop")
-            }
-            audioQueue.addLast(frame)
-            queuedAudioBytes += frame.size
-            audioInFrames++
-            audioInBytes += frame.size
-            maybeReportAudioStatsLocked("enqueue")
-            audioQueueLock.notifyAll()
-        }
-    }
-
-    private fun startAudioWorkerLocked() {
-        if (audioWorkerRunning) {
-            return
-        }
-        audioWorkerRunning = true
-        audioWorker = thread(name = "aa-audio-playback", start = true) {
-            try {
-                while (audioWorkerRunning) {
-                    val chunk = synchronized(audioQueueLock) {
-                        while (audioWorkerRunning && audioQueue.isEmpty()) {
-                            audioQueueLock.wait()
-                        }
-                        if (!audioWorkerRunning) {
-                            return@thread
-                        }
-                        audioQueue.removeFirst().also { queuedAudioBytes -= it.size }
-                    }
-                    val track = synchronized(lock) { audioTrack } ?: continue
-                    writeAudioFully(track, chunk)
-                }
-            } catch (_: InterruptedException) {
-            } catch (ex: Throwable) {
-                AasdkNative.nativeReportProjectionStats("audio worker stopped: ${ex.javaClass.simpleName}: ${ex.message}")
-                synchronized(lock) {
-                    stopAudioLocked()
-                }
-            }
-        }
+    @Suppress("UNUSED_PARAMETER")
+    fun nativePushAudio(streamId: Int, data: ByteArray, _ptsUs: Long) {
+        audioRenderer(streamId)?.push(data)
     }
 
     private fun startVideoWorkerLocked() {
@@ -272,67 +208,6 @@ object AaProjectionSink : SurfaceHolder.Callback {
         }
         videoWorker?.interrupt()
         videoWorker = null
-    }
-
-    private fun stopAudioWorkerLocked() {
-        audioWorkerRunning = false
-        synchronized(audioQueueLock) {
-            audioQueue.clear()
-            queuedAudioBytes = 0
-            audioQueueLock.notifyAll()
-        }
-        audioWorker?.interrupt()
-        audioWorker = null
-    }
-
-    private fun writeAudioFully(track: AudioTrack, data: ByteArray) {
-        var offset = 0
-        while (offset < data.size && audioWorkerRunning) {
-            val beforeMs = SystemClock.elapsedRealtime()
-            val written = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                track.write(data, offset, data.size - offset, AudioTrack.WRITE_BLOCKING)
-            } else {
-                track.write(data, offset, data.size - offset)
-            }
-            val writeMs = SystemClock.elapsedRealtime() - beforeMs
-            if (written <= 0) {
-                synchronized(audioQueueLock) {
-                    audioWriteShorts++
-                    reportAudioStatsLocked("write_error_$written")
-                }
-                break
-            }
-            offset += written
-            synchronized(audioQueueLock) {
-                audioWrittenBytes += written.toLong()
-                if (written < data.size - (offset - written)) {
-                    audioWriteShorts++
-                }
-                if (writeMs > SLOW_AUDIO_WRITE_MS) {
-                    reportAudioStatsLocked("slow_write_${writeMs}ms")
-                } else {
-                    maybeReportAudioStatsLocked("write")
-                }
-            }
-        }
-    }
-
-    private fun maybeReportAudioStatsLocked(reason: String) {
-        val nowMs = SystemClock.elapsedRealtime()
-        if (nowMs - lastAudioStatsLogMs >= 5_000L) {
-            lastAudioStatsLogMs = nowMs
-            reportAudioStatsLocked(reason)
-        }
-    }
-
-    private fun reportAudioStatsLocked(reason: String) {
-        val playbackHead = audioTrack?.playbackHeadPosition ?: -1
-        AasdkNative.nativeReportProjectionStats(
-            "audio reason=$reason inFrames=$audioInFrames inBytes=$audioInBytes " +
-                "writtenBytes=$audioWrittenBytes queuedBytes=$queuedAudioBytes queuedFrames=${audioQueue.size} " +
-                "droppedFrames=$audioDroppedFrames droppedBytes=$audioDroppedBytes shortWrites=$audioWriteShorts " +
-                "playbackHead=$playbackHead sr=$configuredAudioSampleRate ch=$configuredAudioChannels"
-        )
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {
@@ -483,62 +358,6 @@ object AaProjectionSink : SurfaceHolder.Callback {
         startVideoWorkerLocked()
     }
 
-    private fun ensureAudioTrackLocked() {
-        if (configuredAudioSampleRate <= 0 || configuredAudioChannels <= 0) {
-            return
-        }
-        if (audioTrack != null) {
-            return
-        }
-        val channelMask = if (configuredAudioChannels > 1) {
-            AudioFormat.CHANNEL_OUT_STEREO
-        } else {
-            AudioFormat.CHANNEL_OUT_MONO
-        }
-        val minBuffer = AudioTrack.getMinBufferSize(
-            configuredAudioSampleRate,
-            channelMask,
-            AudioFormat.ENCODING_PCM_16BIT
-        )
-        val track = AudioTrack(
-            AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_MEDIA)
-                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                .build(),
-            AudioFormat.Builder()
-                .setSampleRate(configuredAudioSampleRate)
-                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                .setChannelMask(channelMask)
-                .build(),
-            minBuffer.coerceAtLeast(configuredAudioSampleRate),
-            AudioTrack.MODE_STREAM,
-            AudioManager.AUDIO_SESSION_ID_GENERATE
-        )
-        track.play()
-        audioTrack = track
-        synchronized(audioQueueLock) {
-            audioInFrames = 0L
-            audioInBytes = 0L
-            audioDroppedFrames = 0L
-            audioDroppedBytes = 0L
-            audioWrittenBytes = 0L
-            audioWriteShorts = 0L
-            lastAudioStatsLogMs = 0L
-            reportAudioStatsLocked("start")
-        }
-        startAudioWorkerLocked()
-    }
-
-    private fun maxAudioQueueBytesLocked(): Int {
-        if (configuredAudioSampleRate <= 0 || configuredAudioChannels <= 0) {
-            return MIN_AUDIO_QUEUE_BYTES
-        }
-        val bytesPerMillisecond =
-            (configuredAudioSampleRate * configuredAudioChannels * 2) / 1000
-        return (bytesPerMillisecond * MAX_AUDIO_BUFFER_DURATION_MS)
-            .coerceAtLeast(MIN_AUDIO_QUEUE_BYTES)
-    }
-
     private fun stopVideoLocked() {
         stopVideoWorkerLocked()
         videoCodec?.runCatching {
@@ -549,11 +368,249 @@ object AaProjectionSink : SurfaceHolder.Callback {
     }
 
     private fun stopAudioLocked() {
-        stopAudioWorkerLocked()
-        audioTrack?.runCatching {
-            stop()
-            release()
+        audioRenderers.forEach { it.stop() }
+    }
+
+    private fun audioRenderer(streamId: Int): AudioRenderer? {
+        return audioRenderers.getOrNull(streamId).also { renderer ->
+            if (renderer == null) {
+                AasdkNative.nativeReportProjectionStats("audio invalid stream=$streamId")
+            }
         }
-        audioTrack = null
+    }
+
+    private class AudioRenderer(
+        private val streamId: Int,
+        private val label: String
+    ) {
+        private val lock = Any()
+        private val queueLock = Object()
+        private val queue = ArrayDeque<ByteArray>()
+
+        @Volatile
+        private var running = false
+        @Volatile
+        private var track: AudioTrack? = null
+
+        private var worker: Thread? = null
+        private var queuedBytes = 0
+        private var inFrames = 0L
+        private var inBytes = 0L
+        private var droppedFrames = 0L
+        private var droppedBytes = 0L
+        private var writtenBytes = 0L
+        private var writeShorts = 0L
+        private var lastStatsLogMs = 0L
+        private var configuredSampleRate = 0
+        private var configuredChannels = 0
+
+        fun configure(sampleRate: Int, channelCount: Int) {
+            synchronized(lock) {
+                if (track != null &&
+                    configuredSampleRate == sampleRate &&
+                    configuredChannels == channelCount
+                ) {
+                    return
+                }
+                stopLocked()
+                configuredSampleRate = sampleRate
+                configuredChannels = channelCount
+                ensureTrackLocked()
+            }
+        }
+
+        fun push(data: ByteArray) {
+            synchronized(queueLock) {
+                if (!running) {
+                    return
+                }
+                val maxQueueBytes = maxQueueBytesLocked()
+                if (queuedBytes + data.size > maxQueueBytes) {
+                    while (queue.isNotEmpty() && queuedBytes + data.size > maxQueueBytes) {
+                        val dropped = queue.removeFirst()
+                        queuedBytes -= dropped.size
+                        droppedFrames++
+                        droppedBytes += dropped.size
+                    }
+                    reportStatsLocked("drop")
+                }
+                queue.addLast(data)
+                queuedBytes += data.size
+                inFrames++
+                inBytes += data.size
+                maybeReportStatsLocked("enqueue")
+                queueLock.notifyAll()
+            }
+        }
+
+        fun stop() {
+            synchronized(lock) {
+                stopLocked()
+            }
+        }
+
+        private fun ensureTrackLocked() {
+            if (configuredSampleRate <= 0 || configuredChannels <= 0) {
+                return
+            }
+            val channelMask = if (configuredChannels > 1) {
+                AudioFormat.CHANNEL_OUT_STEREO
+            } else {
+                AudioFormat.CHANNEL_OUT_MONO
+            }
+            val minBuffer = AudioTrack.getMinBufferSize(
+                configuredSampleRate,
+                channelMask,
+                AudioFormat.ENCODING_PCM_16BIT
+            )
+            if (minBuffer <= 0) {
+                AasdkNative.nativeReportProjectionStats("audio[$label] min buffer failed=$minBuffer")
+                return
+            }
+            val usage = if (streamId == AUDIO_STREAM_MEDIA) {
+                AudioAttributes.USAGE_MEDIA
+            } else {
+                AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE
+            }
+            val contentType = if (streamId == AUDIO_STREAM_MEDIA) {
+                AudioAttributes.CONTENT_TYPE_MUSIC
+            } else {
+                AudioAttributes.CONTENT_TYPE_SPEECH
+            }
+            val newTrack = AudioTrack(
+                AudioAttributes.Builder()
+                    .setUsage(usage)
+                    .setContentType(contentType)
+                    .build(),
+                AudioFormat.Builder()
+                    .setSampleRate(configuredSampleRate)
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setChannelMask(channelMask)
+                    .build(),
+                minBuffer.coerceAtLeast(configuredSampleRate),
+                AudioTrack.MODE_STREAM,
+                AudioManager.AUDIO_SESSION_ID_GENERATE
+            )
+            newTrack.play()
+            track = newTrack
+            synchronized(queueLock) {
+                queue.clear()
+                queuedBytes = 0
+                inFrames = 0L
+                inBytes = 0L
+                droppedFrames = 0L
+                droppedBytes = 0L
+                writtenBytes = 0L
+                writeShorts = 0L
+                lastStatsLogMs = 0L
+                reportStatsLocked("start")
+            }
+            startWorkerLocked()
+        }
+
+        private fun startWorkerLocked() {
+            if (running) {
+                return
+            }
+            running = true
+            worker = thread(name = "aa-audio-$label", start = true) {
+                try {
+                    while (running) {
+                        val chunk = synchronized(queueLock) {
+                            while (running && queue.isEmpty()) {
+                                queueLock.wait()
+                            }
+                            if (!running) {
+                                return@thread
+                            }
+                            queue.removeFirst().also { queuedBytes -= it.size }
+                        }
+                        val activeTrack = track ?: continue
+                        writeFully(activeTrack, chunk)
+                    }
+                } catch (_: InterruptedException) {
+                } catch (ex: Throwable) {
+                    AasdkNative.nativeReportProjectionStats(
+                        "audio[$label] worker stopped: ${ex.javaClass.simpleName}: ${ex.message}"
+                    )
+                    stop()
+                }
+            }
+        }
+
+        private fun writeFully(activeTrack: AudioTrack, data: ByteArray) {
+            var offset = 0
+            while (offset < data.size && running) {
+                val beforeMs = SystemClock.elapsedRealtime()
+                val written = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    activeTrack.write(data, offset, data.size - offset, AudioTrack.WRITE_BLOCKING)
+                } else {
+                    activeTrack.write(data, offset, data.size - offset)
+                }
+                val writeMs = SystemClock.elapsedRealtime() - beforeMs
+                if (written <= 0) {
+                    synchronized(queueLock) {
+                        writeShorts++
+                        reportStatsLocked("write_error_$written")
+                    }
+                    break
+                }
+                offset += written
+                synchronized(queueLock) {
+                    writtenBytes += written.toLong()
+                    if (written < data.size - (offset - written)) {
+                        writeShorts++
+                    }
+                    if (writeMs > SLOW_AUDIO_WRITE_MS) {
+                        reportStatsLocked("slow_write_${writeMs}ms")
+                    } else {
+                        maybeReportStatsLocked("write")
+                    }
+                }
+            }
+        }
+
+        private fun stopLocked() {
+            running = false
+            synchronized(queueLock) {
+                queue.clear()
+                queuedBytes = 0
+                queueLock.notifyAll()
+            }
+            worker?.interrupt()
+            worker = null
+            track?.runCatching {
+                stop()
+                release()
+            }
+            track = null
+        }
+
+        private fun maybeReportStatsLocked(reason: String) {
+            val nowMs = SystemClock.elapsedRealtime()
+            if (nowMs - lastStatsLogMs >= 5_000L) {
+                lastStatsLogMs = nowMs
+                reportStatsLocked(reason)
+            }
+        }
+
+        private fun reportStatsLocked(reason: String) {
+            val playbackHead = track?.playbackHeadPosition ?: -1
+            AasdkNative.nativeReportProjectionStats(
+                "audio[$label] reason=$reason inFrames=$inFrames inBytes=$inBytes " +
+                    "writtenBytes=$writtenBytes queuedBytes=$queuedBytes queuedFrames=${queue.size} " +
+                    "droppedFrames=$droppedFrames droppedBytes=$droppedBytes shortWrites=$writeShorts " +
+                    "playbackHead=$playbackHead sr=$configuredSampleRate ch=$configuredChannels"
+            )
+        }
+
+        private fun maxQueueBytesLocked(): Int {
+            if (configuredSampleRate <= 0 || configuredChannels <= 0) {
+                return MIN_AUDIO_QUEUE_BYTES
+            }
+            val bytesPerMillisecond = (configuredSampleRate * configuredChannels * 2) / 1000
+            return (bytesPerMillisecond * MAX_AUDIO_BUFFER_DURATION_MS)
+                .coerceAtLeast(MIN_AUDIO_QUEUE_BYTES)
+        }
     }
 }
