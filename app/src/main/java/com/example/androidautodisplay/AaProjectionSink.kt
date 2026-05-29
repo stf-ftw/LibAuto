@@ -34,7 +34,10 @@ object AaProjectionSink : SurfaceHolder.Callback {
     private var videoWorker: Thread? = null
     private val videoQueue = ArrayDeque<VideoFrame>()
     private var videoNeedsKeyFrame = true
+    private var videoConfigQueuedForKeyFrame = false
     private var videoRecoveryDrops = 0L
+    private var videoPacketLogCount = 0
+    private var lastVideoConfig: ByteArray? = null
     @Volatile
     private var videoWorkerRunning = false
     private val audioRenderers = arrayOf(
@@ -48,7 +51,8 @@ object AaProjectionSink : SurfaceHolder.Callback {
 
     private data class VideoFrame(
         val data: ByteArray,
-        val ptsUs: Long
+        val ptsUs: Long,
+        val flags: Int = 0
     )
 
     fun bindSurfaceView(surfaceView: SurfaceView) {
@@ -100,20 +104,34 @@ object AaProjectionSink : SurfaceHolder.Callback {
 
     @JvmStatic
     fun nativePushVideo(data: ByteArray, ptsUs: Long) {
-        val frame = VideoFrame(data, ptsUs)
-        val isIdr = isIdrFrame(frame.data)
-        val isConfig = isAvcConfigFrame(frame.data)
+        val isIdr = isIdrFrame(data)
+        val isConfig = isAvcConfigFrame(data)
+        val flags = if (isConfig && !isIdr) MediaCodec.BUFFER_FLAG_CODEC_CONFIG else 0
+        val frame = VideoFrame(data, ptsUs, flags)
+        maybeLogVideoPacket(data, ptsUs, flags, isIdr, isConfig)
         synchronized(videoQueueLock) {
             if (!videoWorkerRunning) {
                 return
+            }
+            if (isConfig) {
+                lastVideoConfig = data.copyOf()
             }
             if (videoNeedsKeyFrame) {
                 if (!isIdr && !isConfig) {
                     return
                 }
+                if (isIdr && !videoConfigQueuedForKeyFrame) {
+                    lastVideoConfig?.let { config ->
+                        videoQueue.addLast(VideoFrame(config, 0L, MediaCodec.BUFFER_FLAG_CODEC_CONFIG))
+                    }
+                }
                 videoQueue.addLast(frame)
+                if (isConfig) {
+                    videoConfigQueuedForKeyFrame = true
+                }
                 if (isIdr) {
                     videoNeedsKeyFrame = false
+                    videoConfigQueuedForKeyFrame = false
                 }
                 videoQueueLock.notifyAll()
                 return
@@ -124,6 +142,7 @@ object AaProjectionSink : SurfaceHolder.Callback {
                 } else {
                     videoQueue.clear()
                     videoNeedsKeyFrame = true
+                    videoConfigQueuedForKeyFrame = false
                     videoRecoveryDrops += 1
                     if (videoRecoveryDrops <= 3 || videoRecoveryDrops % 25L == 0L) {
                         AasdkNative.nativeReportProjectionStats(
@@ -161,7 +180,10 @@ object AaProjectionSink : SurfaceHolder.Callback {
         synchronized(videoQueueLock) {
             videoQueue.clear()
             videoNeedsKeyFrame = true
+            videoConfigQueuedForKeyFrame = false
             videoRecoveryDrops = 0
+            videoPacketLogCount = 0
+            lastVideoConfig = null
         }
         videoWorkerRunning = true
         videoWorker = thread(name = "aa-video-decode", start = true) {
@@ -186,7 +208,7 @@ object AaProjectionSink : SurfaceHolder.Callback {
                         continue
                     }
                     val inputBuffer = codec.getInputBuffer(inputIndex) ?: continue
-                    queueVideoBuffer(codec, inputIndex, inputBuffer, frame.data, frame.ptsUs)
+                    queueVideoBuffer(codec, inputIndex, inputBuffer, frame.data, frame.ptsUs, frame.flags)
                 }
             } catch (_: InterruptedException) {
             } catch (ex: Throwable) {
@@ -203,7 +225,9 @@ object AaProjectionSink : SurfaceHolder.Callback {
         synchronized(videoQueueLock) {
             videoQueue.clear()
             videoNeedsKeyFrame = true
+            videoConfigQueuedForKeyFrame = false
             videoRecoveryDrops = 0
+            lastVideoConfig = null
             videoQueueLock.notifyAll()
         }
         videoWorker?.interrupt()
@@ -236,17 +260,25 @@ object AaProjectionSink : SurfaceHolder.Callback {
         inputIndex: Int,
         inputBuffer: ByteBuffer,
         data: ByteArray,
-        ptsUs: Long
+        ptsUs: Long,
+        flags: Int
     ) {
         val normalized = normalizeAvcBuffer(data)
         inputBuffer.clear()
         inputBuffer.put(normalized)
+        val queuePtsUs = if ((flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+            0L
+        } else if (ptsUs > 0) {
+            ptsUs
+        } else {
+            SystemClock.elapsedRealtimeNanos() / 1000L
+        }
         codec.queueInputBuffer(
             inputIndex,
             0,
             normalized.size,
-            if (ptsUs > 0) ptsUs else SystemClock.elapsedRealtimeNanos() / 1000L,
-            0
+            queuePtsUs,
+            flags
         )
         drainVideoCodec(codec)
     }
@@ -270,6 +302,51 @@ object AaProjectionSink : SurfaceHolder.Callback {
 
     private fun isAvcConfigFrame(data: ByteArray): Boolean {
         return hasNalType(data, 7, 8)
+    }
+
+    private fun maybeLogVideoPacket(
+        data: ByteArray,
+        ptsUs: Long,
+        flags: Int,
+        isIdr: Boolean,
+        isConfig: Boolean
+    ) {
+        if (videoPacketLogCount >= 30 || (videoPacketLogCount >= 20 && !isConfig && !isIdr)) {
+            return
+        }
+        videoPacketLogCount += 1
+        AasdkNative.nativeReportProjectionStats(
+            "video packet size=${data.size} pts=$ptsUs flags=$flags idr=$isIdr config=$isConfig nal=${describeNalTypes(data)}"
+        )
+    }
+
+    private fun describeNalTypes(data: ByteArray): String {
+        val types = mutableListOf<Int>()
+        var index = 0
+        var foundStartCode = false
+        while (index + 4 < data.size && types.size < 8) {
+            val start = when {
+                data[index] == 0.toByte() &&
+                    data[index + 1] == 0.toByte() &&
+                    data[index + 2] == 1.toByte() -> index + 3
+                index + 5 < data.size &&
+                    data[index] == 0.toByte() &&
+                    data[index + 1] == 0.toByte() &&
+                    data[index + 2] == 0.toByte() &&
+                    data[index + 3] == 1.toByte() -> index + 4
+                else -> {
+                    index += 1
+                    continue
+                }
+            }
+            foundStartCode = true
+            types += data[start].toInt() and 0x1F
+            index = start + 1
+        }
+        if (!foundStartCode && data.isNotEmpty()) {
+            types += data[0].toInt() and 0x1F
+        }
+        return types.joinToString(prefix = "[", postfix = "]")
     }
 
     private fun hasNalType(data: ByteArray, vararg wantedTypes: Int): Boolean {
@@ -345,6 +422,11 @@ object AaProjectionSink : SurfaceHolder.Callback {
         }
         try {
             codec.configure(format, activeSurface, null, 0)
+            runCatching {
+                codec.setVideoScalingMode(MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT)
+            }.onFailure { ex ->
+                AasdkNative.nativeReportProjectionStats("video scaling mode failed: ${ex.message}")
+            }
             codec.start()
         } catch (ex: Exception) {
             AasdkNative.nativeReportProjectionStats(
@@ -354,7 +436,9 @@ object AaProjectionSink : SurfaceHolder.Callback {
             return
         }
         videoCodec = codec
-        AasdkNative.nativeReportProjectionStats("video codec started ${configuredVideoWidth}x${configuredVideoHeight}")
+        AasdkNative.nativeReportProjectionStats(
+            "video codec started ${configuredVideoWidth}x${configuredVideoHeight} name=${codec.name}"
+        )
         startVideoWorkerLocked()
     }
 

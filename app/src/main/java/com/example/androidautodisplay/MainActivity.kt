@@ -136,6 +136,7 @@ class MainActivity : AppCompatActivity() {
     private var projectionFrameHeight = 720
     private var projectionMarginWidth = 0
     private var projectionMarginHeight = 0
+    private var lastVideoLayoutSignature: String? = null
     private var mediaSession: MediaSession? = null
     private var learningMediaKeyAction: MediaKeyAction? = null
     private var learningMediaKeyDownSignature: String? = null
@@ -877,7 +878,7 @@ class MainActivity : AppCompatActivity() {
                 projectionFrameWidth <= 0 || projectionFrameHeight <= 0) {
                 return@post
             }
-            val videoAspect = projectionVideoWidth.toFloat() / projectionVideoHeight.toFloat()
+            val videoAspect = projectionFrameWidth.toFloat() / projectionFrameHeight.toFloat()
             val containerAspect = containerWidth.toFloat() / containerHeight.toFloat()
             val (viewportWidth, viewportHeight) = if (containerAspect > videoAspect) {
                 val height = containerHeight
@@ -891,24 +892,20 @@ class MainActivity : AppCompatActivity() {
                 viewportHeight,
                 Gravity.CENTER
             )
-            val surfaceWidth = ((viewportWidth.toFloat() * projectionFrameWidth.toFloat()) /
-                projectionVideoWidth.toFloat()).roundToInt().coerceAtLeast(1)
-            val surfaceHeight = ((viewportHeight.toFloat() * projectionFrameHeight.toFloat()) /
-                projectionVideoHeight.toFloat()).roundToInt().coerceAtLeast(1)
-            val surfaceLeftMargin = -((surfaceWidth.toFloat() * (projectionMarginWidth.toFloat() / 2f)) /
-                projectionFrameWidth.toFloat()).roundToInt()
-            val surfaceTopMargin = -((surfaceHeight.toFloat() * (projectionMarginHeight.toFloat() / 2f)) /
-                projectionFrameHeight.toFloat()).roundToInt()
             videoSurface.layoutParams = FrameLayout.LayoutParams(
-                surfaceWidth,
-                surfaceHeight,
-                Gravity.TOP or Gravity.START
-            ).apply {
-                leftMargin = surfaceLeftMargin
-                topMargin = surfaceTopMargin
-            }
+                viewportWidth,
+                viewportHeight,
+                Gravity.CENTER
+            )
             projectionStatus.bringToFront()
             videoSurface.holder.setFixedSize(projectionFrameWidth, projectionFrameHeight)
+            val signature = "container=${containerWidth}x$containerHeight viewport=${viewportWidth}x$viewportHeight " +
+                "surface=${viewportWidth}x$viewportHeight holder=${projectionFrameWidth}x$projectionFrameHeight " +
+                "active=${projectionVideoWidth}x$projectionVideoHeight margins=${projectionMarginWidth}x$projectionMarginHeight"
+            if (signature != lastVideoLayoutSignature) {
+                lastVideoLayoutSignature = signature
+                AasdkNative.nativeReportProjectionStats("video surface layout $signature")
+            }
         }
     }
 
