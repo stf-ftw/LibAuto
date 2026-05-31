@@ -11,6 +11,7 @@
 #include <thread>
 #include <sys/syscall.h>
 #include <unistd.h>
+#include <pthread.h>
 
 namespace native_log {
 
@@ -72,6 +73,8 @@ std::string GetLogFilePath() {
 
 void Log(const char* tag, const char* level, const std::string& message) {
     std::lock_guard<std::mutex> lock(g_log_mutex);
+    char thread_name[16] = {};
+    pthread_getname_np(pthread_self(), thread_name, sizeof(thread_name));
     std::string line = timestamp();
     line += " [";
     line += level;
@@ -79,6 +82,8 @@ void Log(const char* tag, const char* level, const std::string& message) {
     line += tag;
     line += " tid=";
     line += std::to_string(static_cast<long>(syscall(SYS_gettid)));
+    line += " thread=";
+    line += thread_name[0] != '\0' ? thread_name : "?";
     line += " ";
     line += message;
     write_line(line);

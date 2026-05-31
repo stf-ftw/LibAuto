@@ -153,6 +153,7 @@ std::atomic<bool> g_car_speed_sensor_started{false};
 std::atomic<bool> g_navigation_focus_active{false};
 std::atomic<int32_t> g_latest_car_speed_mps{0};
 std::atomic<uint64_t> g_touch_event_count{0};
+std::atomic<uint64_t> g_touch_drop_count{0};
 std::atomic<uint64_t> g_button_event_count{0};
 std::atomic<uint64_t> g_video_frame_count{0};
 std::atomic<int32_t> g_video_width{kDefaultVideoWidth};
@@ -687,16 +688,16 @@ struct NativeTouchPoint {
     int32_t pointer_id;
 };
 
-void sendTouchEventMulti(
+bool sendTouchEventMulti(
     const std::shared_ptr<AaSession>& session,
     int32_t action,
     int32_t action_index,
     std::vector<NativeTouchPoint> points) {
     if (session == nullptr || session->input == nullptr) {
-        return;
+        return false;
     }
     if (points.empty()) {
-        return;
+        return false;
     }
     if (points.size() > 2) {
         points.resize(2);
@@ -704,7 +705,15 @@ void sendTouchEventMulti(
     const auto in_flight = g_touch_in_flight.load();
     if ((action == 2 && in_flight >= kMaxTouchInFlight) ||
         in_flight >= kMaxTouchHardLimit) {
-        return;
+        const auto drops = g_touch_drop_count.fetch_add(1) + 1;
+        if (drops <= 8 || drops % 100 == 0) {
+            native_log::Logf(LOG_TAG, "I",
+                             "AA touch native drop action=%d inFlight=%d drops=%llu",
+                             action,
+                             in_flight,
+                             static_cast<unsigned long long>(drops));
+        }
+        return false;
     }
     g_touch_in_flight.fetch_add(1);
     boost::asio::post(session->strand, [session, action, action_index, points = std::move(points)]() {
@@ -751,6 +760,7 @@ void sendTouchEventMulti(
         );
         session->input->sendInputEventIndication(indication, std::move(promise));
     });
+    return true;
 }
 
 void sendTouchEvent(
@@ -2160,6 +2170,7 @@ void stopAaSession() {
     g_touch_event_count.store(0);
     g_button_event_count.store(0);
     g_video_frame_count.store(0);
+    g_touch_drop_count.store(0);
     g_touch_in_flight.store(0);
     stopVideoSink();
     stopAudioSink(kAudioSinkMedia);
@@ -2392,13 +2403,13 @@ Java_com_example_androidautodisplay_AasdkNative_nativeSendTouchMulti(
             static_cast<int32_t>(pointerId1)
         });
     }
-    sendTouchEventMulti(
+    const bool queued = sendTouchEventMulti(
         session,
         static_cast<int32_t>(action),
         static_cast<int32_t>(actionIndex),
         std::move(points)
     );
-    return JNI_TRUE;
+    return queued ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

@@ -7,6 +7,7 @@ import android.media.AudioTrack
 import android.media.MediaCodec
 import android.media.MediaFormat
 import android.os.Build
+import android.os.Process
 import android.os.SystemClock
 import android.view.Surface
 import android.view.SurfaceHolder
@@ -18,9 +19,11 @@ object AaProjectionSink : SurfaceHolder.Callback {
     private const val VIDEO_MIME = "video/avc"
     private const val INPUT_TIMEOUT_US = 0L
     private const val MAX_AUDIO_BUFFER_DURATION_MS = 500
-    private const val MIN_AUDIO_QUEUE_BYTES = 32 * 1024
+    private const val TARGET_MEDIA_AUDIO_BUFFER_MS = 160
+    private const val TARGET_PROMPT_AUDIO_BUFFER_MS = 100
+    private const val MIN_AUDIO_QUEUE_BYTES = 48 * 1024
     private const val MAX_VIDEO_QUEUE_FRAMES = 8
-    private const val SLOW_AUDIO_WRITE_MS = 250L
+    private const val SLOW_AUDIO_WRITE_MS = 80L
     private const val AUDIO_STREAM_MEDIA = 0
     private const val AUDIO_STREAM_SPEECH = 1
     private const val AUDIO_STREAM_SYSTEM = 2
@@ -484,6 +487,12 @@ object AaProjectionSink : SurfaceHolder.Callback {
         private var droppedBytes = 0L
         private var writtenBytes = 0L
         private var writeShorts = 0L
+        private var writeCalls = 0L
+        private var underruns = 0L
+        private var lastWriteMs = 0L
+        private var maxWriteMs = 0L
+        private var prebuffering = true
+        private var prebufferStartedMs = 0L
         private var lastStatsLogMs = 0L
         private var configuredSampleRate = 0
         private var configuredChannels = 0
@@ -561,6 +570,11 @@ object AaProjectionSink : SurfaceHolder.Callback {
             } else {
                 AudioAttributes.CONTENT_TYPE_SPEECH
             }
+            val trackBufferBytes = maxOf(
+                minBuffer * 4,
+                targetPrebufferBytesLocked() * 2,
+                configuredSampleRate
+            )
             val newTrack = AudioTrack(
                 AudioAttributes.Builder()
                     .setUsage(usage)
@@ -571,7 +585,7 @@ object AaProjectionSink : SurfaceHolder.Callback {
                     .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
                     .setChannelMask(channelMask)
                     .build(),
-                minBuffer.coerceAtLeast(configuredSampleRate),
+                trackBufferBytes,
                 AudioTrack.MODE_STREAM,
                 AudioManager.AUDIO_SESSION_ID_GENERATE
             )
@@ -586,6 +600,12 @@ object AaProjectionSink : SurfaceHolder.Callback {
                 droppedBytes = 0L
                 writtenBytes = 0L
                 writeShorts = 0L
+                writeCalls = 0L
+                underruns = 0L
+                lastWriteMs = 0L
+                maxWriteMs = 0L
+                prebuffering = true
+                prebufferStartedMs = 0L
                 lastStatsLogMs = 0L
                 reportStatsLocked("start")
             }
@@ -598,15 +618,33 @@ object AaProjectionSink : SurfaceHolder.Callback {
             }
             running = true
             worker = thread(name = "aa-audio-$label", start = true) {
+                runCatching {
+                    Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
+                }.onFailure {
+                    AasdkNative.nativeReportProjectionStats(
+                        "audio[$label] priority failed thread=${Thread.currentThread().name}: ${it.message}"
+                    )
+                }
+                AasdkNative.nativeReportProjectionStats(
+                    "audio[$label] writer started thread=${Thread.currentThread().name}"
+                )
                 try {
                     while (running) {
                         val chunk = synchronized(queueLock) {
-                            while (running && queue.isEmpty()) {
-                                queueLock.wait()
+                            while (running && shouldWaitForAudioLocked()) {
+                                if (queue.isEmpty() && !prebuffering) {
+                                    underruns++
+                                    prebuffering = true
+                                    prebufferStartedMs = 0L
+                                    reportStatsLocked("underrun")
+                                }
+                                queueLock.wait(20L)
                             }
                             if (!running) {
                                 return@thread
                             }
+                            prebuffering = false
+                            prebufferStartedMs = 0L
                             queue.removeFirst().also { queuedBytes -= it.size }
                         }
                         val activeTrack = track ?: continue
@@ -627,7 +665,7 @@ object AaProjectionSink : SurfaceHolder.Callback {
             while (offset < data.size && running) {
                 val beforeMs = SystemClock.elapsedRealtime()
                 val written = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    activeTrack.write(data, offset, data.size - offset, AudioTrack.WRITE_NON_BLOCKING)
+                    activeTrack.write(data, offset, data.size - offset, AudioTrack.WRITE_BLOCKING)
                 } else {
                     activeTrack.write(data, offset, data.size - offset)
                 }
@@ -642,6 +680,9 @@ object AaProjectionSink : SurfaceHolder.Callback {
                 offset += written
                 synchronized(queueLock) {
                     writtenBytes += written.toLong()
+                    writeCalls += 1
+                    lastWriteMs = writeMs
+                    maxWriteMs = maxOf(maxWriteMs, writeMs)
                     if (written < data.size - (offset - written)) {
                         writeShorts++
                     }
@@ -681,11 +722,30 @@ object AaProjectionSink : SurfaceHolder.Callback {
         private fun reportStatsLocked(reason: String) {
             val playbackHead = track?.playbackHeadPosition ?: -1
             AasdkNative.nativeReportProjectionStats(
-                "audio[$label] reason=$reason inFrames=$inFrames inBytes=$inBytes " +
-                    "writtenBytes=$writtenBytes queuedBytes=$queuedBytes queuedFrames=${queue.size} " +
+                "audio[$label] reason=$reason thread=${Thread.currentThread().name} " +
+                    "inFrames=$inFrames inBytes=$inBytes writtenBytes=$writtenBytes " +
+                    "queuedBytes=$queuedBytes queuedMs=${queuedDurationMsLocked()} queuedFrames=${queue.size} " +
                     "droppedFrames=$droppedFrames droppedBytes=$droppedBytes shortWrites=$writeShorts " +
+                    "underruns=$underruns writeCalls=$writeCalls lastWriteMs=$lastWriteMs " +
+                    "maxWriteMs=$maxWriteMs prebuffering=$prebuffering targetMs=${targetPrebufferMs()} " +
                     "playbackHead=$playbackHead sr=$configuredSampleRate ch=$configuredChannels"
             )
+        }
+
+        private fun shouldWaitForAudioLocked(): Boolean {
+            if (queue.isEmpty()) {
+                prebufferStartedMs = 0L
+                return true
+            }
+            if (!prebuffering || queuedBytes >= targetPrebufferBytesLocked()) {
+                prebufferStartedMs = 0L
+                return false
+            }
+            val nowMs = SystemClock.elapsedRealtime()
+            if (prebufferStartedMs == 0L) {
+                prebufferStartedMs = nowMs
+            }
+            return nowMs - prebufferStartedMs < targetPrebufferMs()
         }
 
         private fun maxQueueBytesLocked(): Int {
@@ -695,6 +755,30 @@ object AaProjectionSink : SurfaceHolder.Callback {
             val bytesPerMillisecond = (configuredSampleRate * configuredChannels * 2) / 1000
             return (bytesPerMillisecond * MAX_AUDIO_BUFFER_DURATION_MS)
                 .coerceAtLeast(MIN_AUDIO_QUEUE_BYTES)
+        }
+
+        private fun targetPrebufferBytesLocked(): Int {
+            if (configuredSampleRate <= 0 || configuredChannels <= 0) {
+                return MIN_AUDIO_QUEUE_BYTES / 2
+            }
+            val bytesPerMillisecond = (configuredSampleRate * configuredChannels * 2) / 1000
+            return (bytesPerMillisecond * targetPrebufferMs()).coerceAtLeast(1)
+        }
+
+        private fun queuedDurationMsLocked(): Int {
+            if (configuredSampleRate <= 0 || configuredChannels <= 0) {
+                return 0
+            }
+            val bytesPerMillisecond = (configuredSampleRate * configuredChannels * 2) / 1000
+            return if (bytesPerMillisecond <= 0) 0 else queuedBytes / bytesPerMillisecond
+        }
+
+        private fun targetPrebufferMs(): Int {
+            return if (streamId == AUDIO_STREAM_MEDIA) {
+                TARGET_MEDIA_AUDIO_BUFFER_MS
+            } else {
+                TARGET_PROMPT_AUDIO_BUFFER_MS
+            }
         }
     }
 }
