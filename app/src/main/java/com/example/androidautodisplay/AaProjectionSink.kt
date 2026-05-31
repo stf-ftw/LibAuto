@@ -637,7 +637,7 @@ object AaProjectionSink : SurfaceHolder.Callback {
                             while (running && shouldWaitForAudioLocked()) {
                                 if (queue.isEmpty() && !prebuffering) {
                                     underruns++
-                                    prebuffering = true
+                                    prebuffering = shouldRebufferAfterUnderrun()
                                     prebufferStartedMs = 0L
                                     if (underruns <= 5L || underruns % 25L == 0L) {
                                         reportStatsLocked("queue_underrun")
@@ -693,7 +693,7 @@ object AaProjectionSink : SurfaceHolder.Callback {
                         writeShorts++
                     }
                     if (writeMs > SLOW_AUDIO_WRITE_MS) {
-                        reportStatsLocked("slow_write_${writeMs}ms")
+                        maybeReportStatsLocked("slow_write_${writeMs}ms")
                     } else {
                         maybeReportStatsLocked("write")
                     }
@@ -759,6 +759,10 @@ object AaProjectionSink : SurfaceHolder.Callback {
                 prebufferStartedMs = nowMs
             }
             return nowMs - prebufferStartedMs < targetPrebufferMs()
+        }
+
+        private fun shouldRebufferAfterUnderrun(): Boolean {
+            return streamId != AUDIO_STREAM_MEDIA
         }
 
         private fun maxQueueBytesLocked(): Int {
