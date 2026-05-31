@@ -24,7 +24,8 @@ object AaProjectionSink : SurfaceHolder.Callback {
     private const val MIN_AUDIO_QUEUE_BYTES = 48 * 1024
     private const val MAX_VIDEO_QUEUE_FRAMES = 8
     private const val SLOW_AUDIO_WRITE_MS = 80L
-    private const val AUDIO_WRITE_CHUNK_DURATION_MS = 20
+    private const val AUDIO_WRITE_CHUNK_DURATION_MS = 10
+    private const val AUDIO_WRITE_IDLE_WAIT_MS = 5L
     private const val AUDIO_STREAM_MEDIA = 0
     private const val AUDIO_STREAM_SPEECH = 1
     private const val AUDIO_STREAM_SYSTEM = 2
@@ -481,6 +482,8 @@ object AaProjectionSink : SurfaceHolder.Callback {
         private var track: AudioTrack? = null
 
         private var worker: Thread? = null
+        private var currentWriteChunk: ByteArray? = null
+        private var currentWriteOffset = 0
         private var queuedBytes = 0
         private var inFrames = 0L
         private var inBytes = 0L
@@ -490,6 +493,7 @@ object AaProjectionSink : SurfaceHolder.Callback {
         private var writeShorts = 0L
         private var writeCalls = 0L
         private var underruns = 0L
+        private var writeBackpressure = 0L
         private var lastWriteMs = 0L
         private var maxWriteMs = 0L
         private var prebuffering = true
@@ -605,8 +609,11 @@ object AaProjectionSink : SurfaceHolder.Callback {
                 writeShorts = 0L
                 writeCalls = 0L
                 underruns = 0L
+                writeBackpressure = 0L
                 lastWriteMs = 0L
                 maxWriteMs = 0L
+                currentWriteChunk = null
+                currentWriteOffset = 0
                 prebuffering = true
                 prebufferStartedMs = 0L
                 lastStatsLogMs = 0L
@@ -633,9 +640,12 @@ object AaProjectionSink : SurfaceHolder.Callback {
                 )
                 try {
                     while (running) {
-                        val chunk = synchronized(queueLock) {
-                            while (running && shouldWaitForAudioLocked()) {
-                                if (queue.isEmpty() && !prebuffering) {
+                        val activeTrack = track ?: continue
+                        val wrote = writeNextSlice(activeTrack)
+                        if (!wrote) {
+                            var waitedForAudio = false
+                            synchronized(queueLock) {
+                                if (running && queue.isEmpty() && currentWriteChunk == null && !prebuffering) {
                                     underruns++
                                     prebuffering = true
                                     prebufferStartedMs = 0L
@@ -643,17 +653,15 @@ object AaProjectionSink : SurfaceHolder.Callback {
                                         reportStatsLocked("queue_underrun")
                                     }
                                 }
-                                queueLock.wait(20L)
+                                if (running && shouldWaitForAudioLocked()) {
+                                    queueLock.wait(AUDIO_WRITE_IDLE_WAIT_MS)
+                                    waitedForAudio = true
+                                }
                             }
-                            if (!running) {
-                                return@thread
+                            if (running && !waitedForAudio) {
+                                SystemClock.sleep(AUDIO_WRITE_IDLE_WAIT_MS)
                             }
-                            prebuffering = false
-                            prebufferStartedMs = 0L
-                            queue.removeFirst().also { queuedBytes -= it.size }
                         }
-                        val activeTrack = track ?: continue
-                        writeFully(activeTrack, chunk)
                     }
                 } catch (_: InterruptedException) {
                 } catch (ex: Throwable) {
@@ -665,40 +673,81 @@ object AaProjectionSink : SurfaceHolder.Callback {
             }
         }
 
-        private fun writeFully(activeTrack: AudioTrack, data: ByteArray) {
-            var offset = 0
-            while (offset < data.size && running) {
-                val requested = minOf(data.size - offset, audioWriteChunkBytes())
-                val beforeMs = SystemClock.elapsedRealtime()
-                val written = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    activeTrack.write(data, offset, requested, AudioTrack.WRITE_BLOCKING)
+        private fun writeNextSlice(activeTrack: AudioTrack): Boolean {
+            val slice = synchronized(queueLock) {
+                if (shouldWaitForAudioLocked()) {
+                    null
                 } else {
-                    activeTrack.write(data, offset, requested)
-                }
-                val writeMs = SystemClock.elapsedRealtime() - beforeMs
-                if (written <= 0) {
-                    synchronized(queueLock) {
-                        writeShorts++
-                        reportStatsLocked(if (written == 0) "write_backpressure" else "write_error_$written")
+                    prebuffering = false
+                    prebufferStartedMs = 0L
+                    if (currentWriteChunk == null) {
+                        currentWriteChunk = queue.removeFirst()
+                        currentWriteOffset = 0
                     }
-                    break
-                }
-                offset += written
-                synchronized(queueLock) {
-                    writtenBytes += written.toLong()
-                    writeCalls += 1
-                    lastWriteMs = writeMs
-                    maxWriteMs = maxOf(maxWriteMs, writeMs)
-                    if (written < requested) {
-                        writeShorts++
-                    }
-                    if (writeMs > SLOW_AUDIO_WRITE_MS) {
-                        reportStatsLocked("slow_write_${writeMs}ms")
+                    val chunk = currentWriteChunk
+                    if (chunk == null) {
+                        null
                     } else {
-                        maybeReportStatsLocked("write")
+                        AudioSlice(
+                            chunk,
+                            currentWriteOffset,
+                            minOf(chunk.size - currentWriteOffset, audioWriteChunkBytes())
+                        )
                     }
+                }
+            } ?: return false
+
+            val beforeMs = SystemClock.elapsedRealtime()
+            val written = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                activeTrack.write(
+                    slice.data,
+                    slice.offset,
+                    slice.length,
+                    AudioTrack.WRITE_NON_BLOCKING
+                )
+            } else {
+                activeTrack.write(slice.data, slice.offset, slice.length)
+            }
+            val writeMs = SystemClock.elapsedRealtime() - beforeMs
+
+            synchronized(queueLock) {
+                if (written <= 0) {
+                    writeShorts++
+                    if (written == 0) {
+                        writeBackpressure++
+                        if (writeBackpressure <= 5L || writeBackpressure % 100L == 0L) {
+                            reportStatsLocked("write_backpressure")
+                        } else {
+                            maybeReportStatsLocked("write_backpressure")
+                        }
+                    } else {
+                        reportStatsLocked("write_error_$written")
+                    }
+                    return false
+                }
+
+                if (currentWriteChunk === slice.data) {
+                    currentWriteOffset += written
+                    queuedBytes = (queuedBytes - written).coerceAtLeast(0)
+                    if (currentWriteOffset >= slice.data.size) {
+                        currentWriteChunk = null
+                        currentWriteOffset = 0
+                    }
+                }
+                writtenBytes += written.toLong()
+                writeCalls += 1
+                lastWriteMs = writeMs
+                maxWriteMs = maxOf(maxWriteMs, writeMs)
+                if (written < slice.length) {
+                    writeShorts++
+                }
+                if (writeMs > SLOW_AUDIO_WRITE_MS) {
+                    reportStatsLocked("slow_write_${writeMs}ms")
+                } else {
+                    maybeReportStatsLocked("write")
                 }
             }
+            return true
         }
 
         private fun stopLocked() {
@@ -706,6 +755,8 @@ object AaProjectionSink : SurfaceHolder.Callback {
             synchronized(queueLock) {
                 queue.clear()
                 queuedBytes = 0
+                currentWriteChunk = null
+                currentWriteOffset = 0
                 queueLock.notifyAll()
             }
             worker?.interrupt()
@@ -737,7 +788,8 @@ object AaProjectionSink : SurfaceHolder.Callback {
                     "inFrames=$inFrames inBytes=$inBytes writtenBytes=$writtenBytes " +
                     "queuedBytes=$queuedBytes queuedMs=${queuedDurationMsLocked()} queuedFrames=${queue.size} " +
                     "droppedFrames=$droppedFrames droppedBytes=$droppedBytes shortWrites=$writeShorts " +
-                    "underruns=$underruns writeCalls=$writeCalls lastWriteMs=$lastWriteMs " +
+                    "underruns=$underruns writeBackpressure=$writeBackpressure " +
+                    "writeCalls=$writeCalls lastWriteMs=$lastWriteMs " +
                     "maxWriteMs=$maxWriteMs prebuffering=$prebuffering targetMs=${targetPrebufferMs()} " +
                     "trackUnderruns=$trackUnderruns trackBufferBytes=$configuredTrackBufferBytes " +
                     "playbackHead=$playbackHead sr=$configuredSampleRate ch=$configuredChannels"
@@ -745,6 +797,10 @@ object AaProjectionSink : SurfaceHolder.Callback {
         }
 
         private fun shouldWaitForAudioLocked(): Boolean {
+            if (currentWriteChunk != null) {
+                prebufferStartedMs = 0L
+                return false
+            }
             if (queue.isEmpty()) {
                 prebufferStartedMs = 0L
                 return true
@@ -801,5 +857,11 @@ object AaProjectionSink : SurfaceHolder.Callback {
                 TARGET_PROMPT_AUDIO_BUFFER_MS
             }
         }
+
+        private data class AudioSlice(
+            val data: ByteArray,
+            val offset: Int,
+            val length: Int
+        )
     }
 }
