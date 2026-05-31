@@ -61,9 +61,30 @@ void Messenger::enqueueReceive(ChannelId channelId, ReceivePromise::Pointer prom
 void Messenger::enqueueSend(Message::Pointer message, SendPromise::Pointer promise)
 {
     boost::asio::dispatch(sendStrand_, [this, self = this->shared_from_this(), message = std::move(message), promise = std::move(promise)]() mutable {
-        channelSendPromiseQueue_.emplace_back(std::make_pair(std::move(message), std::move(promise)));
+        const bool wasEmpty = channelSendPromiseQueue_.empty();
+        const bool isInput = message->getChannelId() == ChannelId::INPUT;
 
-        if(channelSendPromiseQueue_.size() == 1)
+        if (isInput)
+        {
+            channelSendPromiseQueue_.emplace_back(std::make_pair(std::move(message), std::move(promise)));
+        }
+        else
+        {
+            // Touch MOVE traffic is intentionally allowed to be stale. Keep audio ACKs,
+            // control responses, and focus/sensor messages from sitting behind queued input.
+            auto insertBefore = channelSendPromiseQueue_.end();
+            for (auto it = channelSendPromiseQueue_.begin(); it != channelSendPromiseQueue_.end(); ++it)
+            {
+                if (it->first->getChannelId() == ChannelId::INPUT)
+                {
+                    insertBefore = it;
+                    break;
+                }
+            }
+            channelSendPromiseQueue_.insert(insertBefore, std::make_pair(std::move(message), std::move(promise)));
+        }
+
+        if(wasEmpty)
         {
             this->doSend();
         }
