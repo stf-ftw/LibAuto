@@ -1180,8 +1180,10 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             "DISCONNECTED" -> {
-                if (aasdkRunning && !projectionStarting) {
+                if (aasdkRunning) {
                     resetProjectionPipeline()
+                    projectionStarting = false
+                    aasdkRunning = false
                     showLauncherScreen()
                 } else {
                     scheduleProjectionClose(state)
@@ -1812,10 +1814,12 @@ class MainActivity : AppCompatActivity() {
         private var latestMove: TouchCommand? = null
         private var running = true
         private var droppedMoves = 0L
+        private var rejectedSends = 0L
         private var sentEvents = 0L
         private var maxSendMs = 0L
         private var lastSendMs = 0L
         private var lastMoveSentMs = 0L
+        private var touchBackoffUntilMs = 0L
         private var lastStatsLogMs = 0L
         private val worker = Thread({ loop() }, "aa-touch-coalesce").apply {
             isDaemon = true
@@ -1876,8 +1880,14 @@ class MainActivity : AppCompatActivity() {
                         sentEvents += 1
                         lastSendMs = durationMs
                         maxSendMs = maxOf(maxSendMs, durationMs)
-                        if (!ok || durationMs >= TOUCH_SEND_STALL_LOG_MS) {
-                            reportLocked(if (ok) "slow_send_${durationMs}ms" else "send_rejected")
+                        if (!ok) {
+                            rejectedSends += 1
+                            if (command.action == MotionEvent.ACTION_MOVE) {
+                                touchBackoffUntilMs = SystemClock.elapsedRealtime() + TOUCH_SEND_BACKOFF_MS
+                            }
+                            maybeLogLocked("send_rejected", force = rejectedSends <= 8L)
+                        } else if (durationMs >= TOUCH_SEND_STALL_LOG_MS) {
+                            reportLocked("slow_send_${durationMs}ms")
                         } else {
                             maybeLogLocked("send")
                         }
@@ -1900,8 +1910,10 @@ class MainActivity : AppCompatActivity() {
                     }
                     val move = latestMove
                     if (move != null) {
-                        val nowMs = SystemClock.uptimeMillis()
-                        val waitMs = TOUCH_SEND_MOVE_INTERVAL_MS - (nowMs - lastMoveSentMs)
+                        val nowMs = SystemClock.elapsedRealtime()
+                        val intervalWaitMs = TOUCH_SEND_MOVE_INTERVAL_MS - (nowMs - lastMoveSentMs)
+                        val backoffWaitMs = touchBackoffUntilMs - nowMs
+                        val waitMs = maxOf(intervalWaitMs, backoffWaitMs)
                         if (waitMs <= 0L) {
                             latestMove = null
                             lastMoveSentMs = nowMs
@@ -1916,9 +1928,9 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        private fun maybeLogLocked(reason: String) {
+        private fun maybeLogLocked(reason: String, force: Boolean = false) {
             val nowMs = SystemClock.elapsedRealtime()
-            if (sentEvents <= 8L || nowMs - lastStatsLogMs >= 5_000L ||
+            if (force || sentEvents <= 8L || nowMs - lastStatsLogMs >= 5_000L ||
                 (droppedMoves > 0L && droppedMoves % 100L == 0L)
             ) {
                 lastStatsLogMs = nowMs
@@ -1929,8 +1941,10 @@ class MainActivity : AppCompatActivity() {
         private fun reportLocked(reason: String) {
             AasdkNative.nativeReportProjectionStats(
                 "touch reason=$reason thread=${Thread.currentThread().name} sent=$sentEvents " +
-                    "droppedMoves=$droppedMoves immediateDepth=${immediateQueue.size} " +
-                    "pendingMove=${latestMove != null} lastSendMs=$lastSendMs maxSendMs=$maxSendMs"
+                    "droppedMoves=$droppedMoves rejectedSends=$rejectedSends " +
+                    "immediateDepth=${immediateQueue.size} pendingMove=${latestMove != null} " +
+                    "backoffMs=${(touchBackoffUntilMs - SystemClock.elapsedRealtime()).coerceAtLeast(0L)} " +
+                    "lastSendMs=$lastSendMs maxSendMs=$maxSendMs"
             )
         }
     }
@@ -2278,6 +2292,7 @@ class MainActivity : AppCompatActivity() {
         const val TOUCH_MOVE_INTERVAL_MS = 24L
         const val TOUCH_MULTI_MOVE_INTERVAL_MS = 20L
         const val TOUCH_SEND_MOVE_INTERVAL_MS = 24L
+        const val TOUCH_SEND_BACKOFF_MS = 80L
         const val TOUCH_SEND_STALL_LOG_MS = 12L
         const val TOUCH_MOVE_DEAD_ZONE_PX = 3
         const val MAX_TOUCH_IMMEDIATE_QUEUE = 16

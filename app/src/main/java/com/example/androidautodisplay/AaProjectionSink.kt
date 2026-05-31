@@ -24,6 +24,7 @@ object AaProjectionSink : SurfaceHolder.Callback {
     private const val MIN_AUDIO_QUEUE_BYTES = 48 * 1024
     private const val MAX_VIDEO_QUEUE_FRAMES = 8
     private const val SLOW_AUDIO_WRITE_MS = 80L
+    private const val AUDIO_WRITE_CHUNK_DURATION_MS = 20
     private const val AUDIO_STREAM_MEDIA = 0
     private const val AUDIO_STREAM_SPEECH = 1
     private const val AUDIO_STREAM_SYSTEM = 2
@@ -663,11 +664,12 @@ object AaProjectionSink : SurfaceHolder.Callback {
         private fun writeFully(activeTrack: AudioTrack, data: ByteArray) {
             var offset = 0
             while (offset < data.size && running) {
+                val requested = minOf(data.size - offset, audioWriteChunkBytes())
                 val beforeMs = SystemClock.elapsedRealtime()
                 val written = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    activeTrack.write(data, offset, data.size - offset, AudioTrack.WRITE_BLOCKING)
+                    activeTrack.write(data, offset, requested, AudioTrack.WRITE_BLOCKING)
                 } else {
-                    activeTrack.write(data, offset, data.size - offset)
+                    activeTrack.write(data, offset, requested)
                 }
                 val writeMs = SystemClock.elapsedRealtime() - beforeMs
                 if (written <= 0) {
@@ -683,7 +685,7 @@ object AaProjectionSink : SurfaceHolder.Callback {
                     writeCalls += 1
                     lastWriteMs = writeMs
                     maxWriteMs = maxOf(maxWriteMs, writeMs)
-                    if (written < data.size - (offset - written)) {
+                    if (written < requested) {
                         writeShorts++
                     }
                     if (writeMs > SLOW_AUDIO_WRITE_MS) {
@@ -763,6 +765,15 @@ object AaProjectionSink : SurfaceHolder.Callback {
             }
             val bytesPerMillisecond = (configuredSampleRate * configuredChannels * 2) / 1000
             return (bytesPerMillisecond * targetPrebufferMs()).coerceAtLeast(1)
+        }
+
+        private fun audioWriteChunkBytes(): Int {
+            if (configuredSampleRate <= 0 || configuredChannels <= 0) {
+                return 4096
+            }
+            val bytesPerFrame = configuredChannels * 2
+            val frames = (configuredSampleRate * AUDIO_WRITE_CHUNK_DURATION_MS) / 1000
+            return (frames * bytesPerFrame).coerceAtLeast(bytesPerFrame)
         }
 
         private fun queuedDurationMsLocked(): Int {
