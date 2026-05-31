@@ -105,7 +105,7 @@ constexpr int kAudioSinkSystem = 2;
 constexpr int kAudioBitDepth = 16;
 constexpr uint32_t kMaxUnacked = 1;
 constexpr uint32_t kMediaAudioMaxUnacked = 4;
-constexpr int32_t kMaxTouchInFlight = 1;
+constexpr int32_t kMaxTouchInFlight = 3;
 constexpr int32_t kMaxTouchHardLimit = 8;
 constexpr std::array<uint32_t, 19> kSupportedButtonCodes = {
     static_cast<uint32_t>(proto::enums::ButtonCode::MENU),
@@ -688,62 +688,15 @@ struct NativeTouchPoint {
     int32_t pointer_id;
 };
 
-struct PendingNativeTouchMove {
-    int32_t action = 2;
-    int32_t action_index = 0;
-    std::vector<NativeTouchPoint> points;
-};
-
-std::mutex g_touch_move_mutex;
-bool g_touch_move_send_active = false;
-bool g_touch_move_pending = false;
-PendingNativeTouchMove g_touch_pending_move;
-
 void resetTouchPipeline() {
     g_touch_in_flight.store(0);
-    std::lock_guard<std::mutex> lock(g_touch_move_mutex);
-    g_touch_move_send_active = false;
-    g_touch_move_pending = false;
-    g_touch_pending_move = PendingNativeTouchMove{};
 }
 
-bool postTouchEventMulti(
+bool sendTouchEventMulti(
     const std::shared_ptr<AaSession>& session,
     int32_t action,
     int32_t action_index,
-    std::vector<NativeTouchPoint> points,
-    bool sequenced_move);
-
-void drainPendingTouchMove(const std::shared_ptr<AaSession>& session) {
-    PendingNativeTouchMove next;
-    {
-        std::lock_guard<std::mutex> lock(g_touch_move_mutex);
-        if (!g_touch_move_pending) {
-            g_touch_move_send_active = false;
-            return;
-        }
-        next = std::move(g_touch_pending_move);
-        g_touch_pending_move = PendingNativeTouchMove{};
-        g_touch_move_pending = false;
-    }
-
-    if (!postTouchEventMulti(
-            session,
-            next.action,
-            next.action_index,
-            std::move(next.points),
-            true)) {
-        std::lock_guard<std::mutex> lock(g_touch_move_mutex);
-        g_touch_move_send_active = false;
-    }
-}
-
-bool postTouchEventMulti(
-    const std::shared_ptr<AaSession>& session,
-    int32_t action,
-    int32_t action_index,
-    std::vector<NativeTouchPoint> points,
-    bool sequenced_move) {
+    std::vector<NativeTouchPoint> points) {
     if (session == nullptr || session->input == nullptr) {
         return false;
     }
@@ -754,7 +707,8 @@ bool postTouchEventMulti(
         points.resize(2);
     }
     const auto in_flight = g_touch_in_flight.load();
-    if (in_flight >= kMaxTouchHardLimit) {
+    if ((action == 2 && in_flight >= kMaxTouchInFlight) ||
+        in_flight >= kMaxTouchHardLimit) {
         const auto drops = g_touch_drop_count.fetch_add(1) + 1;
         if (drops <= 8 || drops % 100 == 0) {
             native_log::Logf(LOG_TAG, "I",
@@ -766,98 +720,51 @@ bool postTouchEventMulti(
         return false;
     }
     g_touch_in_flight.fetch_add(1);
-    boost::asio::post(
-        session->strand,
-        [session, action, action_index, points = std::move(points), sequenced_move]() {
-            if (session->input == nullptr) {
+    boost::asio::post(session->strand, [session, action, action_index, points = std::move(points)]() {
+        if (session->input == nullptr) {
+            g_touch_in_flight.fetch_sub(1);
+            return;
+        }
+        proto::messages::InputEventIndication indication;
+        indication.set_timestamp(monotonicMicros());
+        auto* touch = indication.mutable_touch_event();
+        touch->set_action_index(static_cast<uint32_t>(
+            std::clamp(action_index, 0, static_cast<int32_t>(points.size() - 1))
+        ));
+        // AA expects raw Android pointer actions for multi-touch gestures.
+        touch->set_touch_action(static_cast<proto::enums::TouchAction_Enum>(action));
+        const auto config = currentVideoConfig();
+        for (const auto& point : points) {
+            auto* location = touch->add_touch_location();
+            location->set_x(static_cast<uint32_t>(std::clamp(point.x, 0, config.width - 1)));
+            location->set_y(static_cast<uint32_t>(std::clamp(point.y, 0, config.height - 1)));
+            location->set_pointer_id(static_cast<uint32_t>(std::clamp(point.pointer_id, 1, 2)));
+        }
+
+        const auto count = g_touch_event_count.fetch_add(1) + 1;
+        if (count <= 8 || count % 200 == 0) {
+            const auto& first = points.front();
+            native_log::Logf(LOG_TAG, "I",
+                             "AA touch action=%d x=%d y=%d pointer=%d actionIndex=%d pointers=%zu count=%llu",
+                             action, first.x, first.y, first.pointer_id, action_index, points.size(),
+                             static_cast<unsigned long long>(count));
+        }
+
+        auto promise = channel::SendPromise::defer(session->strand);
+        promise->then(
+            []() {
                 g_touch_in_flight.fetch_sub(1);
-                if (sequenced_move) {
-                    drainPendingTouchMove(session);
-                }
-                return;
+            },
+            [](const error::Error& e) {
+                g_touch_in_flight.fetch_sub(1);
+                native_log::Logf(LOG_TAG, "E",
+                                 "AA touch send failed code=%d native=%u",
+                                 static_cast<int>(e.getCode()), e.getNativeCode());
             }
-            proto::messages::InputEventIndication indication;
-            indication.set_timestamp(monotonicMicros());
-            auto* touch = indication.mutable_touch_event();
-            touch->set_action_index(static_cast<uint32_t>(
-                std::clamp(action_index, 0, static_cast<int32_t>(points.size() - 1))
-            ));
-            // AA expects raw Android pointer actions for multi-touch gestures.
-            touch->set_touch_action(static_cast<proto::enums::TouchAction_Enum>(action));
-            const auto config = currentVideoConfig();
-            for (const auto& point : points) {
-                auto* location = touch->add_touch_location();
-                location->set_x(static_cast<uint32_t>(std::clamp(point.x, 0, config.width - 1)));
-                location->set_y(static_cast<uint32_t>(std::clamp(point.y, 0, config.height - 1)));
-                location->set_pointer_id(static_cast<uint32_t>(std::clamp(point.pointer_id, 1, 2)));
-            }
-
-            const auto count = g_touch_event_count.fetch_add(1) + 1;
-            if (count <= 8 || count % 200 == 0) {
-                const auto& first = points.front();
-                native_log::Logf(LOG_TAG, "I",
-                                 "AA touch action=%d x=%d y=%d pointer=%d actionIndex=%d pointers=%zu count=%llu",
-                                 action, first.x, first.y, first.pointer_id, action_index, points.size(),
-                                 static_cast<unsigned long long>(count));
-            }
-
-            auto promise = channel::SendPromise::defer(session->strand);
-            promise->then(
-                [session, sequenced_move]() {
-                    g_touch_in_flight.fetch_sub(1);
-                    if (sequenced_move) {
-                        drainPendingTouchMove(session);
-                    }
-                },
-                [session, sequenced_move](const error::Error& e) {
-                    g_touch_in_flight.fetch_sub(1);
-                    native_log::Logf(LOG_TAG, "E",
-                                     "AA touch send failed code=%d native=%u",
-                                     static_cast<int>(e.getCode()), e.getNativeCode());
-                    if (sequenced_move) {
-                        drainPendingTouchMove(session);
-                    }
-                }
-            );
-            session->input->sendInputEventIndication(indication, std::move(promise));
-        });
+        );
+        session->input->sendInputEventIndication(indication, std::move(promise));
+    });
     return true;
-}
-
-bool sendTouchEventMulti(
-    const std::shared_ptr<AaSession>& session,
-    int32_t action,
-    int32_t action_index,
-    std::vector<NativeTouchPoint> points) {
-    if (points.size() > 2) {
-        points.resize(2);
-    }
-    if (action == 2) {
-        {
-            std::lock_guard<std::mutex> lock(g_touch_move_mutex);
-            if (g_touch_move_send_active) {
-                g_touch_pending_move = {action, action_index, std::move(points)};
-                g_touch_move_pending = true;
-                g_touch_drop_count.fetch_add(1);
-                return true;
-            }
-            g_touch_move_send_active = true;
-        }
-        if (!postTouchEventMulti(session, action, action_index, std::move(points), true)) {
-            std::lock_guard<std::mutex> lock(g_touch_move_mutex);
-            g_touch_move_send_active = false;
-            return false;
-        }
-        return true;
-    }
-    {
-        std::lock_guard<std::mutex> lock(g_touch_move_mutex);
-        if (action == 1 || action == 3 || action == 6) {
-            g_touch_move_pending = false;
-            g_touch_pending_move = PendingNativeTouchMove{};
-        }
-    }
-    return postTouchEventMulti(session, action, action_index, std::move(points), false);
 }
 
 void sendTouchEvent(
