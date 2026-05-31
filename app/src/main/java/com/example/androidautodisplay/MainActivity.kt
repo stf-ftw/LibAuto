@@ -1962,10 +1962,20 @@ class MainActivity : AppCompatActivity() {
         if (shouldDropTouchMove(points)) {
             return
         }
-        sendTouchPoints(MotionEvent.ACTION_MOVE, actionIndex, points)
-        lastTouchMoveSentMs = SystemClock.uptimeMillis()
-        rememberTouchPoints(points)
-        touchMoveCount += 1
+        pendingTouchMove = PendingTouchMove(actionIndex, points)
+        if (touchMoveScheduled) {
+            return
+        }
+
+        val now = SystemClock.uptimeMillis()
+        val interval = if (points.size > 1) TOUCH_MULTI_MOVE_INTERVAL_MS else TOUCH_MOVE_INTERVAL_MS
+        val delayMs = if (lastTouchMoveSentMs == 0L) {
+            0L
+        } else {
+            (interval - (now - lastTouchMoveSentMs)).coerceAtLeast(0L)
+        }
+        touchMoveScheduled = true
+        touchMoveHandler.postDelayed(sendPendingTouchMove, delayMs)
     }
 
     private fun flushPendingTouchMove() {
@@ -2280,12 +2290,12 @@ class MainActivity : AppCompatActivity() {
         const val AA_KEYCODE_MEDIA_PLAY = 126
         const val AA_KEYCODE_MEDIA_PAUSE = 127
         const val AA_KEYCODE_MEDIA_STOP = 86
-        const val TOUCH_MOVE_INTERVAL_MS = 0L
-        const val TOUCH_MULTI_MOVE_INTERVAL_MS = 0L
-        const val TOUCH_SEND_MOVE_INTERVAL_MS = 16L
+        const val TOUCH_MOVE_INTERVAL_MS = 16L
+        const val TOUCH_MULTI_MOVE_INTERVAL_MS = 16L
+        const val TOUCH_SEND_MOVE_INTERVAL_MS = 8L
         const val TOUCH_SEND_BACKOFF_MS = 16L
         const val TOUCH_SEND_STALL_LOG_MS = 12L
-        const val TOUCH_MOVE_DEAD_ZONE_PX = 1
+        const val TOUCH_MOVE_DEAD_ZONE_PX = 3
         const val MAX_TOUCH_IMMEDIATE_QUEUE = 16
     }
 }
