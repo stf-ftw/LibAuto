@@ -18,9 +18,9 @@ import kotlin.concurrent.thread
 object AaProjectionSink : SurfaceHolder.Callback {
     private const val VIDEO_MIME = "video/avc"
     private const val INPUT_TIMEOUT_US = 0L
-    private const val MAX_AUDIO_BUFFER_DURATION_MS = 500
-    private const val TARGET_MEDIA_AUDIO_BUFFER_MS = 160
-    private const val TARGET_PROMPT_AUDIO_BUFFER_MS = 100
+    private const val MAX_AUDIO_BUFFER_DURATION_MS = 1000
+    private const val TARGET_MEDIA_AUDIO_BUFFER_MS = 320
+    private const val TARGET_PROMPT_AUDIO_BUFFER_MS = 120
     private const val MIN_AUDIO_QUEUE_BYTES = 48 * 1024
     private const val MAX_VIDEO_QUEUE_FRAMES = 8
     private const val SLOW_AUDIO_WRITE_MS = 80L
@@ -497,6 +497,7 @@ object AaProjectionSink : SurfaceHolder.Callback {
         private var lastStatsLogMs = 0L
         private var configuredSampleRate = 0
         private var configuredChannels = 0
+        private var configuredTrackBufferBytes = 0
 
         fun configure(sampleRate: Int, channelCount: Int) {
             synchronized(lock) {
@@ -576,6 +577,7 @@ object AaProjectionSink : SurfaceHolder.Callback {
                 targetPrebufferBytesLocked() * 2,
                 configuredSampleRate
             )
+            configuredTrackBufferBytes = trackBufferBytes
             val newTrack = AudioTrack(
                 AudioAttributes.Builder()
                     .setUsage(usage)
@@ -637,7 +639,9 @@ object AaProjectionSink : SurfaceHolder.Callback {
                                     underruns++
                                     prebuffering = true
                                     prebufferStartedMs = 0L
-                                    reportStatsLocked("underrun")
+                                    if (underruns <= 5L || underruns % 25L == 0L) {
+                                        reportStatsLocked("queue_underrun")
+                                    }
                                 }
                                 queueLock.wait(20L)
                             }
@@ -723,6 +727,11 @@ object AaProjectionSink : SurfaceHolder.Callback {
 
         private fun reportStatsLocked(reason: String) {
             val playbackHead = track?.playbackHeadPosition ?: -1
+            val trackUnderruns = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                track?.underrunCount ?: -1
+            } else {
+                -1
+            }
             AasdkNative.nativeReportProjectionStats(
                 "audio[$label] reason=$reason thread=${Thread.currentThread().name} " +
                     "inFrames=$inFrames inBytes=$inBytes writtenBytes=$writtenBytes " +
@@ -730,6 +739,7 @@ object AaProjectionSink : SurfaceHolder.Callback {
                     "droppedFrames=$droppedFrames droppedBytes=$droppedBytes shortWrites=$writeShorts " +
                     "underruns=$underruns writeCalls=$writeCalls lastWriteMs=$lastWriteMs " +
                     "maxWriteMs=$maxWriteMs prebuffering=$prebuffering targetMs=${targetPrebufferMs()} " +
+                    "trackUnderruns=$trackUnderruns trackBufferBytes=$configuredTrackBufferBytes " +
                     "playbackHead=$playbackHead sr=$configuredSampleRate ch=$configuredChannels"
             )
         }
