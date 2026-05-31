@@ -726,9 +726,10 @@ object AaProjectionSink : SurfaceHolder.Callback {
         }
 
         private fun reportStatsLocked(reason: String) {
-            val playbackHead = track?.playbackHeadPosition ?: -1
+            val activeTrack = track
+            val playbackHead = activeTrack?.runCatching { playbackHeadPosition }?.getOrDefault(-1) ?: -1
             val trackUnderruns = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                track?.underrunCount ?: -1
+                activeTrack?.runCatching { underrunCount }?.getOrDefault(-1) ?: -1
             } else {
                 -1
             }
