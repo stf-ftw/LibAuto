@@ -154,6 +154,7 @@ std::atomic<bool> g_navigation_focus_active{false};
 std::atomic<int32_t> g_latest_car_speed_mps{0};
 std::atomic<uint64_t> g_touch_event_count{0};
 std::atomic<uint64_t> g_touch_drop_count{0};
+std::atomic<uint64_t> g_touch_coalesce_count{0};
 std::atomic<uint64_t> g_button_event_count{0};
 std::atomic<uint64_t> g_video_frame_count{0};
 std::atomic<int32_t> g_video_width{kDefaultVideoWidth};
@@ -688,41 +689,76 @@ struct NativeTouchPoint {
     int32_t pointer_id;
 };
 
+struct PendingNativeTouchMove {
+    std::shared_ptr<AaSession> session;
+    int32_t action = 2;
+    int32_t action_index = 0;
+    std::vector<NativeTouchPoint> points;
+    bool has_value = false;
+};
+
+std::mutex g_touch_pending_mutex;
+PendingNativeTouchMove g_pending_touch_move;
+
+void drainPendingTouchMove();
+
 void resetTouchPipeline() {
     g_touch_in_flight.store(0);
+    std::lock_guard<std::mutex> lock(g_touch_pending_mutex);
+    g_pending_touch_move = PendingNativeTouchMove{};
 }
 
-bool sendTouchEventMulti(
+void storePendingTouchMove(
     const std::shared_ptr<AaSession>& session,
     int32_t action,
     int32_t action_index,
     std::vector<NativeTouchPoint> points) {
-    if (session == nullptr || session->input == nullptr) {
-        return false;
-    }
-    if (points.empty()) {
-        return false;
-    }
     if (points.size() > 2) {
         points.resize(2);
     }
+    {
+        std::lock_guard<std::mutex> lock(g_touch_pending_mutex);
+        g_pending_touch_move.session = session;
+        g_pending_touch_move.action = action;
+        g_pending_touch_move.action_index = action_index;
+        g_pending_touch_move.points = std::move(points);
+        g_pending_touch_move.has_value = true;
+    }
+    const auto coalesced = g_touch_coalesce_count.fetch_add(1) + 1;
+    if (coalesced <= 8 || coalesced % 200 == 0) {
+        native_log::Logf(LOG_TAG, "I",
+                         "AA touch native coalesce action=%d inFlight=%d coalesced=%llu",
+                         action,
+                         g_touch_in_flight.load(),
+                         static_cast<unsigned long long>(coalesced));
+    }
+}
+
+void clearPendingTouchMove() {
+    std::lock_guard<std::mutex> lock(g_touch_pending_mutex);
+    g_pending_touch_move = PendingNativeTouchMove{};
+}
+
+void postTouchEventDirect(
+    const std::shared_ptr<AaSession>& session,
+    int32_t action,
+    int32_t action_index,
+    std::vector<NativeTouchPoint> points) {
     const auto in_flight = g_touch_in_flight.load();
-    if ((action == 2 && in_flight >= kMaxTouchInFlight) ||
-        in_flight >= kMaxTouchHardLimit) {
+    if (in_flight >= kMaxTouchHardLimit) {
         const auto drops = g_touch_drop_count.fetch_add(1) + 1;
-        if (drops <= 8 || drops % 100 == 0) {
-            native_log::Logf(LOG_TAG, "I",
-                             "AA touch native drop action=%d inFlight=%d drops=%llu",
-                             action,
-                             in_flight,
-                             static_cast<unsigned long long>(drops));
-        }
-        return false;
+        native_log::Logf(LOG_TAG, "W",
+                         "AA touch native hard drop action=%d inFlight=%d drops=%llu",
+                         action,
+                         in_flight,
+                         static_cast<unsigned long long>(drops));
+        return;
     }
     g_touch_in_flight.fetch_add(1);
     boost::asio::post(session->strand, [session, action, action_index, points = std::move(points)]() {
         if (session->input == nullptr) {
             g_touch_in_flight.fetch_sub(1);
+            drainPendingTouchMove();
             return;
         }
         proto::messages::InputEventIndication indication;
@@ -754,16 +790,64 @@ bool sendTouchEventMulti(
         promise->then(
             []() {
                 g_touch_in_flight.fetch_sub(1);
+                drainPendingTouchMove();
             },
             [](const error::Error& e) {
                 g_touch_in_flight.fetch_sub(1);
                 native_log::Logf(LOG_TAG, "E",
                                  "AA touch send failed code=%d native=%u",
                                  static_cast<int>(e.getCode()), e.getNativeCode());
+                drainPendingTouchMove();
             }
         );
         session->input->sendInputEventIndication(indication, std::move(promise));
     });
+}
+
+void drainPendingTouchMove() {
+    PendingNativeTouchMove pending;
+    {
+        std::lock_guard<std::mutex> lock(g_touch_pending_mutex);
+        if (!g_pending_touch_move.has_value ||
+            g_touch_in_flight.load() >= kMaxTouchInFlight) {
+            return;
+        }
+        pending = std::move(g_pending_touch_move);
+        g_pending_touch_move = PendingNativeTouchMove{};
+    }
+    if (pending.session == nullptr || pending.session->input == nullptr || pending.points.empty()) {
+        return;
+    }
+    postTouchEventDirect(
+        pending.session,
+        pending.action,
+        pending.action_index,
+        std::move(pending.points)
+    );
+}
+
+bool sendTouchEventMulti(
+    const std::shared_ptr<AaSession>& session,
+    int32_t action,
+    int32_t action_index,
+    std::vector<NativeTouchPoint> points) {
+    if (session == nullptr || session->input == nullptr) {
+        return false;
+    }
+    if (points.empty()) {
+        return false;
+    }
+    if (points.size() > 2) {
+        points.resize(2);
+    }
+    if (action == 2 && g_touch_in_flight.load() >= kMaxTouchInFlight) {
+        storePendingTouchMove(session, action, action_index, std::move(points));
+        return true;
+    }
+    if (action != 2) {
+        clearPendingTouchMove();
+    }
+    postTouchEventDirect(session, action, action_index, std::move(points));
     return true;
 }
 
@@ -1965,6 +2049,7 @@ bool startAaSessionWithTransport(
     g_video_frame_count.store(0);
     g_touch_event_count.store(0);
     g_touch_drop_count.store(0);
+    g_touch_coalesce_count.store(0);
     resetTouchPipeline();
     g_button_event_count.store(0);
     session->transport = std::move(transport);
@@ -2177,6 +2262,7 @@ void stopAaSession() {
     g_button_event_count.store(0);
     g_video_frame_count.store(0);
     g_touch_drop_count.store(0);
+    g_touch_coalesce_count.store(0);
     resetTouchPipeline();
     stopVideoSink();
     stopAudioSink(kAudioSinkMedia);

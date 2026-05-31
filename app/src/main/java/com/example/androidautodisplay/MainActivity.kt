@@ -2292,10 +2292,10 @@ class MainActivity : AppCompatActivity() {
         const val AA_KEYCODE_MEDIA_STOP = 86
         const val TOUCH_MOVE_INTERVAL_MS = 16L
         const val TOUCH_MULTI_MOVE_INTERVAL_MS = 16L
-        const val TOUCH_SEND_MOVE_INTERVAL_MS = 8L
+        const val TOUCH_SEND_MOVE_INTERVAL_MS = 0L
         const val TOUCH_SEND_BACKOFF_MS = 16L
         const val TOUCH_SEND_STALL_LOG_MS = 12L
-        const val TOUCH_MOVE_DEAD_ZONE_PX = 3
+        const val TOUCH_MOVE_DEAD_ZONE_PX = 1
         const val MAX_TOUCH_IMMEDIATE_QUEUE = 16
     }
 }
