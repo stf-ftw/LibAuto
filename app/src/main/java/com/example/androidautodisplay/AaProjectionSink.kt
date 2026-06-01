@@ -639,7 +639,7 @@ object AaProjectionSink : SurfaceHolder.Callback {
                                     underruns++
                                     prebuffering = shouldRebufferAfterUnderrun()
                                     prebufferStartedMs = 0L
-                                    if (underruns <= 5L || underruns % 25L == 0L) {
+                                    if (underruns <= 5L || underruns % 250L == 0L) {
                                         reportStatsLocked("queue_underrun")
                                     }
                                 }

@@ -1975,7 +1975,11 @@ class MainActivity : AppCompatActivity() {
             (interval - (now - lastTouchMoveSentMs)).coerceAtLeast(0L)
         }
         touchMoveScheduled = true
-        touchMoveHandler.postDelayed(sendPendingTouchMove, delayMs)
+        if (delayMs == 0L) {
+            sendPendingTouchMove.run()
+        } else {
+            touchMoveHandler.postDelayed(sendPendingTouchMove, delayMs)
+        }
     }
 
     private fun flushPendingTouchMove() {
