@@ -10,11 +10,7 @@
 #include <dlfcn.h>
 #include <memory>
 #include <mutex>
-#include <cerrno>
-#include <pthread.h>
 #include <string>
-#include <sys/resource.h>
-#include <sys/syscall.h>
 #include <thread>
 #include <unwind.h>
 #include <unistd.h>
@@ -109,7 +105,6 @@ constexpr int kAudioSinkSystem = 2;
 constexpr int kAudioBitDepth = 16;
 constexpr uint32_t kMaxUnacked = 1;
 constexpr uint32_t kMediaAudioMaxUnacked = 4;
-constexpr int kAaIoThreadCount = 2;
 constexpr int32_t kMaxTouchInFlight = 3;
 constexpr int32_t kMaxTouchHardLimit = 8;
 constexpr std::array<uint32_t, 19> kSupportedButtonCodes = {
@@ -603,7 +598,7 @@ struct AaSession {
     boost::asio::io_service::strand strand;
     using WorkGuard = boost::asio::executor_work_guard<boost::asio::io_service::executor_type>;
     std::unique_ptr<WorkGuard> work_guard;
-    std::vector<std::thread> io_threads;
+    std::thread io_thread;
     std::shared_ptr<transport::Transport> transport;
     std::shared_ptr<tcp::TCPWrapper> tcp_wrapper;
     tcp::ITCPEndpoint::SocketPointer tcp_socket;
@@ -744,45 +739,6 @@ void clearPendingTouchMove() {
     g_pending_touch_move = PendingNativeTouchMove{};
 }
 
-void configureAaIoThread(size_t index) {
-    char name[16];
-    std::snprintf(name, sizeof(name), "aa-io-%zu", index);
-    pthread_setname_np(pthread_self(), name);
-#ifdef SYS_gettid
-    const auto tid = static_cast<pid_t>(syscall(SYS_gettid));
-#else
-    const auto tid = static_cast<pid_t>(0);
-#endif
-    if (setpriority(PRIO_PROCESS, tid, -16) != 0 && index == 0) {
-        native_log::Logf(LOG_TAG, "W",
-                         "AA io thread priority request failed errno=%d",
-                         errno);
-    }
-}
-
-void startAaIoThreads(const std::shared_ptr<AaSession>& session) {
-    session->io_threads.reserve(kAaIoThreadCount);
-    for (int i = 0; i < kAaIoThreadCount; ++i) {
-        session->io_threads.emplace_back([session, i]() {
-            configureAaIoThread(static_cast<size_t>(i));
-            native_log::Logf(LOG_TAG, "I", "AA io thread started index=%d", i);
-            session->io.run();
-            native_log::Logf(LOG_TAG, "I", "AA io thread stopped index=%d", i);
-        });
-    }
-}
-
-void stopAaIoThreads(const std::shared_ptr<AaSession>& session) {
-    session->io.stop();
-    session->work_guard.reset();
-    for (auto& thread : session->io_threads) {
-        if (thread.joinable() && thread.get_id() != std::this_thread::get_id()) {
-            thread.join();
-        }
-    }
-    session->io_threads.clear();
-}
-
 void postTouchEventDirect(
     const std::shared_ptr<AaSession>& session,
     int32_t action,
@@ -799,53 +755,53 @@ void postTouchEventDirect(
         return;
     }
     g_touch_in_flight.fetch_add(1);
-    auto input = session->input;
-    if (input == nullptr) {
-        g_touch_in_flight.fetch_sub(1);
-        drainPendingTouchMove();
-        return;
-    }
-
-    proto::messages::InputEventIndication indication;
-    indication.set_timestamp(monotonicMicros());
-    auto* touch = indication.mutable_touch_event();
-    touch->set_action_index(static_cast<uint32_t>(
-        std::clamp(action_index, 0, static_cast<int32_t>(points.size() - 1))
-    ));
-    // AA expects raw Android pointer actions for multi-touch gestures.
-    touch->set_touch_action(static_cast<proto::enums::TouchAction_Enum>(action));
-    const auto config = currentVideoConfig();
-    for (const auto& point : points) {
-        auto* location = touch->add_touch_location();
-        location->set_x(static_cast<uint32_t>(std::clamp(point.x, 0, config.width - 1)));
-        location->set_y(static_cast<uint32_t>(std::clamp(point.y, 0, config.height - 1)));
-        location->set_pointer_id(static_cast<uint32_t>(std::clamp(point.pointer_id, 1, 2)));
-    }
-
-    const auto count = g_touch_event_count.fetch_add(1) + 1;
-    if (count <= 8 || count % 200 == 0) {
-        const auto& first = points.front();
-        native_log::Logf(LOG_TAG, "I",
-                         "AA touch action=%d x=%d y=%d pointer=%d actionIndex=%d pointers=%zu count=%llu inFlight=%d",
-                         action, first.x, first.y, first.pointer_id, action_index, points.size(),
-                         static_cast<unsigned long long>(count), g_touch_in_flight.load());
-    }
-
-    auto promise = channel::SendPromise::defer(session->strand);
-    promise->then(
-        []() {
+    boost::asio::post(session->strand, [session, action, action_index, points = std::move(points)]() {
+        if (session->input == nullptr) {
             g_touch_in_flight.fetch_sub(1);
             drainPendingTouchMove();
-        },
-        [](const error::Error& e) {
-            g_touch_in_flight.fetch_sub(1);
-            native_log::Logf(LOG_TAG, "E",
-                             "AA touch send failed code=%d native=%u",
-                             static_cast<int>(e.getCode()), e.getNativeCode());
-            drainPendingTouchMove();
+            return;
         }
-    );
-    input->sendInputEventIndication(indication, std::move(promise));
+        proto::messages::InputEventIndication indication;
+        indication.set_timestamp(monotonicMicros());
+        auto* touch = indication.mutable_touch_event();
+        touch->set_action_index(static_cast<uint32_t>(
+            std::clamp(action_index, 0, static_cast<int32_t>(points.size() - 1))
+        ));
+        // AA expects raw Android pointer actions for multi-touch gestures.
+        touch->set_touch_action(static_cast<proto::enums::TouchAction_Enum>(action));
+        const auto config = currentVideoConfig();
+        for (const auto& point : points) {
+            auto* location = touch->add_touch_location();
+            location->set_x(static_cast<uint32_t>(std::clamp(point.x, 0, config.width - 1)));
+            location->set_y(static_cast<uint32_t>(std::clamp(point.y, 0, config.height - 1)));
+            location->set_pointer_id(static_cast<uint32_t>(std::clamp(point.pointer_id, 1, 2)));
+        }
+
+        const auto count = g_touch_event_count.fetch_add(1) + 1;
+        if (count <= 8 || count % 200 == 0) {
+            const auto& first = points.front();
+            native_log::Logf(LOG_TAG, "I",
+                             "AA touch action=%d x=%d y=%d pointer=%d actionIndex=%d pointers=%zu count=%llu inFlight=%d",
+                             action, first.x, first.y, first.pointer_id, action_index, points.size(),
+                             static_cast<unsigned long long>(count), g_touch_in_flight.load());
+        }
+
+        auto promise = channel::SendPromise::defer(session->strand);
+        promise->then(
+            []() {
+                g_touch_in_flight.fetch_sub(1);
+                drainPendingTouchMove();
+            },
+            [](const error::Error& e) {
+                g_touch_in_flight.fetch_sub(1);
+                native_log::Logf(LOG_TAG, "E",
+                                 "AA touch send failed code=%d native=%u",
+                                 static_cast<int>(e.getCode()), e.getNativeCode());
+                drainPendingTouchMove();
+            }
+        );
+        session->input->sendInputEventIndication(indication, std::move(promise));
+    });
 }
 
 void drainPendingTouchMove() {
@@ -2160,7 +2116,9 @@ bool startAaSessionWithTransport(
     session->sensor->receive(session->sensor_handler);
     session->bluetooth->receive(session->bluetooth_handler);
     session->control->receive(session->control_handler);
-    startAaIoThreads(session);
+    session->io_thread = std::thread([session]() {
+        session->io.run();
+    });
 
     auto promise = channel::SendPromise::defer(session->strand);
     promise->then(
@@ -2312,7 +2270,11 @@ void stopAaSession() {
     stopAudioSink(kAudioSinkSystem);
     stopMicInput();
     session->transport->stop();
-    stopAaIoThreads(session);
+    session->io.stop();
+    session->work_guard.reset();
+    if (session->io_thread.joinable()) {
+        session->io_thread.join();
+    }
 }
 }  // namespace
 
