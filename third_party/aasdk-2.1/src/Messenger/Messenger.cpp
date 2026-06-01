@@ -17,8 +17,11 @@
 */
 
 #include <boost/endian/conversion.hpp>
+#include <aasdk_proto/InputChannelMessageIdsEnum.pb.h>
+#include <aasdk_proto/InputEventIndicationMessage.pb.h>
 #include <f1x/aasdk/Error/Error.hpp>
 #include <f1x/aasdk/Messenger/Messenger.hpp>
+#include <f1x/aasdk/Messenger/MessageId.hpp>
 
 namespace f1x
 {
@@ -26,6 +29,41 @@ namespace aasdk
 {
 namespace messenger
 {
+
+namespace
+{
+
+bool isInputMoveMessage(const Message::Pointer& message)
+{
+    if(message == nullptr || message->getChannelId() != ChannelId::INPUT)
+    {
+        return false;
+    }
+
+    const auto& payload = message->getPayload();
+    if(payload.size() <= MessageId::getSizeOf())
+    {
+        return false;
+    }
+
+    const MessageId messageId(payload);
+    if(messageId.getId() != proto::ids::InputChannelMessage::INPUT_EVENT_INDICATION)
+    {
+        return false;
+    }
+
+    const common::DataConstBuffer inputPayload(payload, MessageId::getSizeOf());
+    proto::messages::InputEventIndication indication;
+    if(!indication.ParseFromArray(inputPayload.cdata, inputPayload.size) ||
+       !indication.has_touch_event())
+    {
+        return false;
+    }
+
+    return static_cast<int32_t>(indication.touch_event().touch_action()) == 2;
+}
+
+}
 
 Messenger::Messenger(boost::asio::io_service& ioService, IMessageInStream::Pointer messageInStream, IMessageOutStream::Pointer messageOutStream)
     : receiveStrand_(ioService)
@@ -68,9 +106,25 @@ void Messenger::enqueueSend(Message::Pointer message, SendPromise::Pointer promi
 
         const bool wasEmpty = channelSendPromiseQueue_.empty();
         const bool isInput = message->getChannelId() == ChannelId::INPUT;
+        const bool isInputMove = isInput && isInputMoveMessage(message);
 
         if (isInput)
         {
+            if(isInputMove)
+            {
+                for(auto it = channelSendPromiseQueue_.begin(); it != channelSendPromiseQueue_.end();)
+                {
+                    if(isInputMoveMessage(it->first))
+                    {
+                        it->second->resolve();
+                        it = channelSendPromiseQueue_.erase(it);
+                    }
+                    else
+                    {
+                        ++it;
+                    }
+                }
+            }
             channelSendPromiseQueue_.emplace_back(std::make_pair(std::move(message), std::move(promise)));
         }
         else
