@@ -61,6 +61,11 @@ void Messenger::enqueueReceive(ChannelId channelId, ReceivePromise::Pointer prom
 void Messenger::enqueueSend(Message::Pointer message, SendPromise::Pointer promise)
 {
     boost::asio::dispatch(sendStrand_, [this, self = this->shared_from_this(), message = std::move(message), promise = std::move(promise)]() mutable {
+        if(message == nullptr)
+        {
+            return;
+        }
+
         const bool wasEmpty = channelSendPromiseQueue_.empty();
         const bool isInput = message->getChannelId() == ChannelId::INPUT;
 
@@ -75,7 +80,7 @@ void Messenger::enqueueSend(Message::Pointer message, SendPromise::Pointer promi
             auto insertBefore = channelSendPromiseQueue_.end();
             for (auto it = channelSendPromiseQueue_.begin(); it != channelSendPromiseQueue_.end(); ++it)
             {
-                if (it->first->getChannelId() == ChannelId::INPUT)
+                if (it->first != nullptr && it->first->getChannelId() == ChannelId::INPUT)
                 {
                     insertBefore = it;
                     break;
