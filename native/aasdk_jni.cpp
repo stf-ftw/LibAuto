@@ -12,6 +12,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <time.h>
 #include <unwind.h>
 #include <unistd.h>
 #include <vector>
@@ -663,12 +664,18 @@ VideoConfigInfo currentVideoConfig() {
     return {0, width, height, frame_width, frame_height, margin_width, margin_height, resolution};
 }
 
-uint64_t monotonicMicros() {
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::high_resolution_clock::now().time_since_epoch()
-        ).count()
-    );
+uint64_t monotonicNanos() {
+    timespec ts{};
+    if (clock_gettime(CLOCK_BOOTTIME, &ts) != 0 &&
+        clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        return static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()
+            ).count()
+        );
+    }
+    return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL +
+           static_cast<uint64_t>(ts.tv_nsec);
 }
 
 proto::enums::TouchAction_Enum toTouchAction(int32_t action) {
@@ -767,7 +774,7 @@ void postTouchEventDirect(
             return;
         }
         proto::messages::InputEventIndication indication;
-        indication.set_timestamp(monotonicMicros());
+        indication.set_timestamp(monotonicNanos());
         auto* touch = indication.mutable_touch_event();
         touch->set_action_index(static_cast<uint32_t>(
             std::clamp(action_index, 0, static_cast<int32_t>(points.size() - 1))
@@ -893,7 +900,7 @@ void sendTouchEvent(
 
         const auto config = currentVideoConfig();
         proto::messages::InputEventIndication indication;
-        indication.set_timestamp(monotonicMicros());
+        indication.set_timestamp(monotonicNanos());
         auto* touch = indication.mutable_touch_event();
         touch->set_touch_action(toTouchAction(action));
         auto* location = touch->add_touch_location();
@@ -936,7 +943,7 @@ void sendButtonEvent(
             return;
         }
         proto::messages::InputEventIndication indication;
-        indication.set_timestamp(monotonicMicros());
+        indication.set_timestamp(monotonicNanos());
         auto* button = indication.mutable_button_event()->add_button_events();
         button->set_scan_code(static_cast<uint32_t>(scan_code));
         button->set_is_pressed(pressed);
