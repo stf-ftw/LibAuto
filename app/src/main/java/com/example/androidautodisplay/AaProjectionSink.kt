@@ -25,7 +25,7 @@ object AaProjectionSink : SurfaceHolder.Callback {
     private const val MIN_AUDIO_QUEUE_BYTES = 48 * 1024
     private const val MAX_VIDEO_QUEUE_FRAMES = 8
     private const val SLOW_AUDIO_WRITE_MS = 80L
-    private const val AUDIO_WRITE_CHUNK_DURATION_MS = 20
+    private const val AUDIO_WRITE_CHUNK_DURATION_MS = 5
     private const val AUDIO_STREAM_MEDIA = 0
     private const val AUDIO_STREAM_SPEECH = 1
     private const val AUDIO_STREAM_SYSTEM = 2
@@ -725,7 +725,7 @@ object AaProjectionSink : SurfaceHolder.Callback {
             running = true
             worker = thread(name = "aa-audio-$label", start = true) {
                 runCatching {
-                    Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
+                    Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
                 }.onFailure {
                     AasdkNative.nativeReportProjectionStats(
                         "audio[$label] priority failed thread=${Thread.currentThread().name}: ${it.message}"

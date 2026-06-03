@@ -786,7 +786,7 @@ void postTouchEventDirect(
             auto* location = touch->add_touch_location();
             location->set_x(static_cast<uint32_t>(std::clamp(point.x, 0, config.width - 1)));
             location->set_y(static_cast<uint32_t>(std::clamp(point.y, 0, config.height - 1)));
-            location->set_pointer_id(static_cast<uint32_t>(std::clamp(point.pointer_id, 1, 2)));
+            location->set_pointer_id(static_cast<uint32_t>(std::clamp(point.pointer_id, 0, 1)));
         }
 
         const auto count = g_touch_event_count.fetch_add(1) + 1;
@@ -906,7 +906,7 @@ void sendTouchEvent(
         auto* location = touch->add_touch_location();
         location->set_x(static_cast<uint32_t>(std::clamp(x, 0, config.width - 1)));
         location->set_y(static_cast<uint32_t>(std::clamp(y, 0, config.height - 1)));
-        location->set_pointer_id(static_cast<uint32_t>(std::clamp(pointer_id, 1, 1)));
+        location->set_pointer_id(static_cast<uint32_t>(std::clamp(pointer_id, 0, 0)));
 
         const auto count = g_touch_event_count.fetch_add(1) + 1;
         if (count % 500 == 0) {
