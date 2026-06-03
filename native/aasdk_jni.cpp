@@ -105,9 +105,10 @@ constexpr int kAudioSinkSystem = 2;
 constexpr int kAudioBitDepth = 16;
 constexpr uint32_t kMaxUnacked = 1;
 constexpr uint32_t kMediaAudioMaxUnacked = 4;
-// Keep the AASDK strand clear for audio/video/control; MOVE spam is lossy by design.
-constexpr int32_t kMaxTouchInFlight = 1;
-constexpr int32_t kMaxTouchHardLimit = 4;
+// Keep the AASDK strand clear for audio/video/control, but allow DOWN + first MOVE
+// to overlap so drag startup does not wait on a full send round trip.
+constexpr int32_t kMaxTouchInFlight = 2;
+constexpr int32_t kMaxTouchHardLimit = 5;
 constexpr int64_t kMaxPendingTouchMoveAgeMs = 90;
 constexpr std::array<uint32_t, 19> kSupportedButtonCodes = {
     static_cast<uint32_t>(proto::enums::ButtonCode::MENU),
