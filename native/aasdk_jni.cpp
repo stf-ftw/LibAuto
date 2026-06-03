@@ -105,11 +105,11 @@ constexpr int kAudioSinkSystem = 2;
 constexpr int kAudioBitDepth = 16;
 constexpr uint32_t kMaxUnacked = 1;
 constexpr uint32_t kMediaAudioMaxUnacked = 4;
-// Keep the AASDK strand clear for audio/video/control, but allow DOWN + first MOVE
-// to overlap so drag startup does not wait on a full send round trip.
-constexpr int32_t kMaxTouchInFlight = 2;
-constexpr int32_t kMaxTouchHardLimit = 5;
-constexpr int64_t kMaxPendingTouchMoveAgeMs = 90;
+// Keep the AASDK strand clear for audio/video/control, but allow a short burst of
+// MOVE indications so fast drags are not reduced to a low-rate latest-only stream.
+constexpr int32_t kMaxTouchInFlight = 4;
+constexpr int32_t kMaxTouchHardLimit = 10;
+constexpr int64_t kMaxPendingTouchMoveAgeMs = 70;
 constexpr std::array<uint32_t, 19> kSupportedButtonCodes = {
     static_cast<uint32_t>(proto::enums::ButtonCode::MENU),
     static_cast<uint32_t>(proto::enums::ButtonCode::HOME),
@@ -315,7 +315,7 @@ void pushVideoFrame(const common::DataConstBuffer& payload, int64_t pts_us) {
                          static_cast<unsigned long long>(count));
         return;
     }
-    if (count <= 4 || count % 200 == 0) {
+    if (count % 600 == 0) {
         native_log::Logf(LOG_TAG, "I",
                          "AA video frame bytes=%zu pts=%lld count=%llu",
                          payload.size,
@@ -346,7 +346,7 @@ void pushVideoFrame(const common::DataConstBuffer& payload, int64_t pts_us) {
     holder.env->CallStaticVoidMethod(g_projection_sink_class, g_push_video, arr, static_cast<jlong>(pts_us));
     holder.env->DeleteLocalRef(arr);
     native_log::LogJniException(holder.env, "nativePushVideo");
-    if (count <= 4 || count % 200 == 0) {
+    if (count % 600 == 0) {
         native_log::Logf(LOG_TAG, "I",
                          "AA video frame delivered count=%llu",
                          static_cast<unsigned long long>(count));
@@ -730,7 +730,7 @@ void storePendingTouchMove(
         g_pending_touch_move.has_value = true;
     }
     const auto coalesced = g_touch_coalesce_count.fetch_add(1) + 1;
-    if (coalesced <= 8 || coalesced % 200 == 0) {
+    if (coalesced % 500 == 0) {
         native_log::Logf(LOG_TAG, "I",
                          "AA touch native coalesce action=%d inFlight=%d coalesced=%llu",
                          action,
@@ -783,7 +783,7 @@ void postTouchEventDirect(
         }
 
         const auto count = g_touch_event_count.fetch_add(1) + 1;
-        if (count <= 8 || count % 200 == 0) {
+        if (count % 500 == 0) {
             const auto& first = points.front();
             native_log::Logf(LOG_TAG, "I",
                              "AA touch action=%d x=%d y=%d pointer=%d actionIndex=%d pointers=%zu count=%llu inFlight=%d",
@@ -902,7 +902,7 @@ void sendTouchEvent(
         location->set_pointer_id(static_cast<uint32_t>(std::clamp(pointer_id, 1, 1)));
 
         const auto count = g_touch_event_count.fetch_add(1) + 1;
-        if (count <= 8 || count % 200 == 0) {
+        if (count % 500 == 0) {
             native_log::Logf(LOG_TAG, "I",
                              "AA touch simple action=%d x=%d y=%d pointer=1 count=%llu",
                              action, x, y, static_cast<unsigned long long>(count));

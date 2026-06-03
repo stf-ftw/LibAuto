@@ -315,7 +315,10 @@ object AaProjectionSink : SurfaceHolder.Callback {
         isIdr: Boolean,
         isConfig: Boolean
     ) {
-        if (videoPacketLogCount >= 30 || (videoPacketLogCount >= 20 && !isConfig && !isIdr)) {
+        if (!isConfig && !isIdr) {
+            return
+        }
+        if (videoPacketLogCount >= 4) {
             return
         }
         videoPacketLogCount += 1
@@ -639,7 +642,7 @@ object AaProjectionSink : SurfaceHolder.Callback {
                                     underruns++
                                     prebuffering = shouldRebufferAfterUnderrun()
                                     prebufferStartedMs = 0L
-                                    if (underruns <= 5L || underruns % 250L == 0L) {
+                                    if (underruns % 500L == 0L) {
                                         reportStatsLocked("queue_underrun")
                                     }
                                 }
