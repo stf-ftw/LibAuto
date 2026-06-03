@@ -105,8 +105,9 @@ constexpr int kAudioSinkSystem = 2;
 constexpr int kAudioBitDepth = 16;
 constexpr uint32_t kMaxUnacked = 1;
 constexpr uint32_t kMediaAudioMaxUnacked = 4;
-constexpr int32_t kMaxTouchInFlight = 3;
-constexpr int32_t kMaxTouchHardLimit = 8;
+// Keep the AASDK strand clear for audio/video/control; MOVE spam is lossy by design.
+constexpr int32_t kMaxTouchInFlight = 1;
+constexpr int32_t kMaxTouchHardLimit = 4;
 constexpr std::array<uint32_t, 19> kSupportedButtonCodes = {
     static_cast<uint32_t>(proto::enums::ButtonCode::MENU),
     static_cast<uint32_t>(proto::enums::ButtonCode::HOME),
