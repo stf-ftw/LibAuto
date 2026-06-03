@@ -15,6 +15,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.Process
 import android.os.SystemClock
 import android.view.Gravity
 import android.view.KeyEvent
@@ -1861,6 +1862,7 @@ class MainActivity : AppCompatActivity() {
 
         private fun loop() {
             try {
+                Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY)
                 while (true) {
                     val command = nextCommand() ?: return
                     val beforeMs = SystemClock.elapsedRealtime()
@@ -1962,13 +1964,20 @@ class MainActivity : AppCompatActivity() {
         if (shouldDropTouchMove(points)) {
             return
         }
+        val interval = if (points.size > 1) TOUCH_MULTI_MOVE_INTERVAL_MS else TOUCH_MOVE_INTERVAL_MS
+        if (interval <= 0L) {
+            sendTouchPoints(MotionEvent.ACTION_MOVE, actionIndex, points)
+            lastTouchMoveSentMs = SystemClock.uptimeMillis()
+            rememberTouchPoints(points)
+            touchMoveCount += 1
+            return
+        }
         pendingTouchMove = PendingTouchMove(actionIndex, points)
         if (touchMoveScheduled) {
             return
         }
 
         val now = SystemClock.uptimeMillis()
-        val interval = if (points.size > 1) TOUCH_MULTI_MOVE_INTERVAL_MS else TOUCH_MOVE_INTERVAL_MS
         val delayMs = if (lastTouchMoveSentMs == 0L) {
             0L
         } else {
@@ -2294,8 +2303,8 @@ class MainActivity : AppCompatActivity() {
         const val AA_KEYCODE_MEDIA_PLAY = 126
         const val AA_KEYCODE_MEDIA_PAUSE = 127
         const val AA_KEYCODE_MEDIA_STOP = 86
-        const val TOUCH_MOVE_INTERVAL_MS = 16L
-        const val TOUCH_MULTI_MOVE_INTERVAL_MS = 16L
+        const val TOUCH_MOVE_INTERVAL_MS = 0L
+        const val TOUCH_MULTI_MOVE_INTERVAL_MS = 0L
         const val TOUCH_SEND_MOVE_INTERVAL_MS = 0L
         const val TOUCH_SEND_BACKOFF_MS = 16L
         const val TOUCH_SEND_STALL_LOG_MS = 12L
