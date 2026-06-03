@@ -1862,7 +1862,7 @@ class MainActivity : AppCompatActivity() {
 
         private fun loop() {
             try {
-                Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY)
+                Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
                 while (true) {
                     val command = nextCommand() ?: return
                     val beforeMs = SystemClock.elapsedRealtime()

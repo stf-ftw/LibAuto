@@ -18,6 +18,7 @@ import kotlin.concurrent.thread
 object AaProjectionSink : SurfaceHolder.Callback {
     private const val VIDEO_MIME = "video/avc"
     private const val INPUT_TIMEOUT_US = 10_000L
+    private const val OUTPUT_TIMEOUT_US = 10_000L
     private const val MAX_AUDIO_BUFFER_DURATION_MS = 1000
     private const val TARGET_MEDIA_AUDIO_BUFFER_MS = 320
     private const val TARGET_PROMPT_AUDIO_BUFFER_MS = 120
@@ -34,8 +35,10 @@ object AaProjectionSink : SurfaceHolder.Callback {
 
     private var surfaceHolder: SurfaceHolder? = null
     private var surface: Surface? = null
+    @Volatile
     private var videoCodec: MediaCodec? = null
     private var videoWorker: Thread? = null
+    private var videoOutputWorker: Thread? = null
     private val videoQueue = ArrayDeque<VideoFrame>()
     private var videoNeedsKeyFrame = true
     private var videoConfigQueuedForKeyFrame = false
@@ -223,8 +226,7 @@ object AaProjectionSink : SurfaceHolder.Callback {
                         }
                         videoQueue.removeFirst()
                     }
-                    val codec = synchronized(lock) { videoCodec } ?: continue
-                    drainVideoCodec(codec)
+                    val codec = videoCodec ?: continue
                     val beforeWaitMs = SystemClock.elapsedRealtime()
                     var inputIndex = codec.dequeueInputBuffer(INPUT_TIMEOUT_US)
                     val waitMs = SystemClock.elapsedRealtime() - beforeWaitMs
@@ -233,7 +235,6 @@ object AaProjectionSink : SurfaceHolder.Callback {
                     }
                     if (inputIndex < 0) {
                         videoInputMisses += 1
-                        drainVideoCodec(codec)
                         inputIndex = codec.dequeueInputBuffer(INPUT_TIMEOUT_US)
                     }
                     if (inputIndex < 0) {
@@ -248,6 +249,43 @@ object AaProjectionSink : SurfaceHolder.Callback {
                 AasdkNative.nativeReportProjectionStats("video worker stopped: ${ex.javaClass.simpleName}: ${ex.message}")
                 synchronized(lock) {
                     stopVideoLocked()
+                }
+            }
+        }
+        videoOutputWorker = thread(name = "aa-video-output", start = true) {
+            runCatching {
+                Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY)
+            }.onFailure { ex ->
+                AasdkNative.nativeReportProjectionStats("video output priority failed: ${ex.message}")
+            }
+            val info = MediaCodec.BufferInfo()
+            while (videoWorkerRunning) {
+                val codec = videoCodec
+                if (codec == null) {
+                    SystemClock.sleep(5)
+                    continue
+                }
+                try {
+                    when (val outputIndex = codec.dequeueOutputBuffer(info, OUTPUT_TIMEOUT_US)) {
+                        MediaCodec.INFO_TRY_AGAIN_LATER -> continue
+                        MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                            AasdkNative.nativeReportProjectionStats("video output format ${codec.outputFormat}")
+                            continue
+                        }
+                        in 0..Int.MAX_VALUE -> {
+                            codec.releaseOutputBuffer(outputIndex, true)
+                            videoRenderedFrames += 1
+                        }
+                    }
+                } catch (_: InterruptedException) {
+                    return@thread
+                } catch (ex: Throwable) {
+                    if (videoWorkerRunning) {
+                        AasdkNative.nativeReportProjectionStats(
+                            "video output stopped: ${ex.javaClass.simpleName}: ${ex.message}"
+                        )
+                    }
+                    return@thread
                 }
             }
         }
@@ -269,7 +307,15 @@ object AaProjectionSink : SurfaceHolder.Callback {
             videoQueueLock.notifyAll()
         }
         videoWorker?.interrupt()
+        videoOutputWorker?.interrupt()
+        if (videoWorker !== Thread.currentThread()) {
+            runCatching { videoWorker?.join(250) }
+        }
+        if (videoOutputWorker !== Thread.currentThread()) {
+            runCatching { videoOutputWorker?.join(250) }
+        }
         videoWorker = null
+        videoOutputWorker = null
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {
@@ -319,7 +365,6 @@ object AaProjectionSink : SurfaceHolder.Callback {
             flags
         )
         videoQueuedFrames += 1
-        drainVideoCodec(codec)
         maybeLogVideoHealth()
     }
 
