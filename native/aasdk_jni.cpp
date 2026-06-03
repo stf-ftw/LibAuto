@@ -108,6 +108,7 @@ constexpr uint32_t kMediaAudioMaxUnacked = 4;
 // Keep the AASDK strand clear for audio/video/control; MOVE spam is lossy by design.
 constexpr int32_t kMaxTouchInFlight = 1;
 constexpr int32_t kMaxTouchHardLimit = 4;
+constexpr int64_t kMaxPendingTouchMoveAgeMs = 90;
 constexpr std::array<uint32_t, 19> kSupportedButtonCodes = {
     static_cast<uint32_t>(proto::enums::ButtonCode::MENU),
     static_cast<uint32_t>(proto::enums::ButtonCode::HOME),
@@ -695,6 +696,7 @@ struct PendingNativeTouchMove {
     int32_t action = 2;
     int32_t action_index = 0;
     std::vector<NativeTouchPoint> points;
+    std::chrono::steady_clock::time_point stored_at{};
     bool has_value = false;
 };
 
@@ -723,6 +725,7 @@ void storePendingTouchMove(
         g_pending_touch_move.action = action;
         g_pending_touch_move.action_index = action_index;
         g_pending_touch_move.points = std::move(points);
+        g_pending_touch_move.stored_at = std::chrono::steady_clock::now();
         g_pending_touch_move.has_value = true;
     }
     const auto coalesced = g_touch_coalesce_count.fetch_add(1) + 1;
@@ -817,6 +820,20 @@ void drainPendingTouchMove() {
         g_pending_touch_move = PendingNativeTouchMove{};
     }
     if (pending.session == nullptr || pending.session->input == nullptr || pending.points.empty()) {
+        return;
+    }
+    const auto age_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - pending.stored_at
+    ).count();
+    if (pending.action == 2 && age_ms > kMaxPendingTouchMoveAgeMs) {
+        const auto drops = g_touch_drop_count.fetch_add(1) + 1;
+        if (drops <= 8 || drops % 100 == 0) {
+            native_log::Logf(LOG_TAG, "W",
+                             "AA touch native stale drop ageMs=%lld limitMs=%lld drops=%llu",
+                             static_cast<long long>(age_ms),
+                             static_cast<long long>(kMaxPendingTouchMoveAgeMs),
+                             static_cast<unsigned long long>(drops));
+        }
         return;
     }
     postTouchEventDirect(
