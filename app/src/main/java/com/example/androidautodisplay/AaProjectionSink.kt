@@ -17,7 +17,7 @@ import kotlin.concurrent.thread
 
 object AaProjectionSink : SurfaceHolder.Callback {
     private const val VIDEO_MIME = "video/avc"
-    private const val INPUT_TIMEOUT_US = 0L
+    private const val INPUT_TIMEOUT_US = 10_000L
     private const val MAX_AUDIO_BUFFER_DURATION_MS = 1000
     private const val TARGET_MEDIA_AUDIO_BUFFER_MS = 320
     private const val TARGET_PROMPT_AUDIO_BUFFER_MS = 120
@@ -41,6 +41,11 @@ object AaProjectionSink : SurfaceHolder.Callback {
     private var videoConfigQueuedForKeyFrame = false
     private var videoRecoveryDrops = 0L
     private var videoPacketLogCount = 0
+    private var videoQueuedFrames = 0L
+    private var videoInputMisses = 0L
+    private var videoRenderedFrames = 0L
+    private var videoMaxQueueDepth = 0
+    private var videoMaxInputWaitMs = 0L
     private var lastVideoConfig: ByteArray? = null
     @Volatile
     private var videoWorkerRunning = false
@@ -130,6 +135,9 @@ object AaProjectionSink : SurfaceHolder.Callback {
                     }
                 }
                 videoQueue.addLast(frame)
+                if (videoQueue.size > videoMaxQueueDepth) {
+                    videoMaxQueueDepth = videoQueue.size
+                }
                 if (isConfig) {
                     videoConfigQueuedForKeyFrame = true
                 }
@@ -157,6 +165,9 @@ object AaProjectionSink : SurfaceHolder.Callback {
                 }
             }
             videoQueue.addLast(frame)
+            if (videoQueue.size > videoMaxQueueDepth) {
+                videoMaxQueueDepth = videoQueue.size
+            }
             videoQueueLock.notifyAll()
         }
     }
@@ -187,11 +198,21 @@ object AaProjectionSink : SurfaceHolder.Callback {
             videoConfigQueuedForKeyFrame = false
             videoRecoveryDrops = 0
             videoPacketLogCount = 0
+            videoQueuedFrames = 0
+            videoInputMisses = 0
+            videoRenderedFrames = 0
+            videoMaxQueueDepth = 0
+            videoMaxInputWaitMs = 0
             lastVideoConfig = null
         }
         videoWorkerRunning = true
         videoWorker = thread(name = "aa-video-decode", start = true) {
             try {
+                runCatching {
+                    Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY)
+                }.onFailure { ex ->
+                    AasdkNative.nativeReportProjectionStats("video priority failed: ${ex.message}")
+                }
                 while (videoWorkerRunning) {
                     val frame = synchronized(videoQueueLock) {
                         while (videoWorkerRunning && videoQueue.isEmpty()) {
@@ -203,12 +224,20 @@ object AaProjectionSink : SurfaceHolder.Callback {
                         videoQueue.removeFirst()
                     }
                     val codec = synchronized(lock) { videoCodec } ?: continue
+                    drainVideoCodec(codec)
+                    val beforeWaitMs = SystemClock.elapsedRealtime()
                     var inputIndex = codec.dequeueInputBuffer(INPUT_TIMEOUT_US)
+                    val waitMs = SystemClock.elapsedRealtime() - beforeWaitMs
+                    if (waitMs > videoMaxInputWaitMs) {
+                        videoMaxInputWaitMs = waitMs
+                    }
                     if (inputIndex < 0) {
+                        videoInputMisses += 1
                         drainVideoCodec(codec)
                         inputIndex = codec.dequeueInputBuffer(INPUT_TIMEOUT_US)
                     }
                     if (inputIndex < 0) {
+                        videoInputMisses += 1
                         continue
                     }
                     val inputBuffer = codec.getInputBuffer(inputIndex) ?: continue
@@ -232,6 +261,11 @@ object AaProjectionSink : SurfaceHolder.Callback {
             videoConfigQueuedForKeyFrame = false
             videoRecoveryDrops = 0
             lastVideoConfig = null
+            videoQueuedFrames = 0
+            videoInputMisses = 0
+            videoRenderedFrames = 0
+            videoMaxQueueDepth = 0
+            videoMaxInputWaitMs = 0
             videoQueueLock.notifyAll()
         }
         videoWorker?.interrupt()
@@ -284,7 +318,9 @@ object AaProjectionSink : SurfaceHolder.Callback {
             queuePtsUs,
             flags
         )
+        videoQueuedFrames += 1
         drainVideoCodec(codec)
+        maybeLogVideoHealth()
     }
 
     private fun normalizeAvcBuffer(data: ByteArray): ByteArray {
@@ -397,9 +433,28 @@ object AaProjectionSink : SurfaceHolder.Callback {
                     AasdkNative.nativeReportProjectionStats("video output format ${codec.outputFormat}")
                     continue
                 }
-                in 0..Int.MAX_VALUE -> codec.releaseOutputBuffer(outputIndex, true)
+                in 0..Int.MAX_VALUE -> {
+                    codec.releaseOutputBuffer(outputIndex, true)
+                    videoRenderedFrames += 1
+                }
             }
         }
+    }
+
+    private fun maybeLogVideoHealth() {
+        if (videoQueuedFrames <= 0 || videoQueuedFrames % 600L != 0L) {
+            return
+        }
+        val queueDepth = synchronized(videoQueueLock) { videoQueue.size }
+        if (queueDepth > videoMaxQueueDepth) {
+            videoMaxQueueDepth = queueDepth
+        }
+        AasdkNative.nativeReportProjectionStats(
+            "video health thread=${Thread.currentThread().name} queued=$videoQueuedFrames " +
+                "rendered=$videoRenderedFrames inputMisses=$videoInputMisses " +
+                "queueDepth=$queueDepth maxQueueDepth=$videoMaxQueueDepth " +
+                "maxInputWaitMs=$videoMaxInputWaitMs"
+        )
     }
 
     private fun ensureVideoCodecLocked() {
