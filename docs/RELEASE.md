@@ -58,7 +58,7 @@ If it does not install or crashes immediately on an older/Chinese Android head u
 - Continued touch/video pipeline tuning after v0.5; touch forwarding is functional, but drag and pinch-to-zoom can still feel sluggish or choppy on some devices.
 - Media control key support is still experimental and may not work on every head unit.
 - Wireless Android Auto remains in progress and is not exposed as a normal launcher flow yet.
-- Development updates may be slower for the next four weeks while the maintainer is in an exam session.
+- I am currently in an exam session, so development updates may be slower over the next four weeks.
 
 ## Notes
 
