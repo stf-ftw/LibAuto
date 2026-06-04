@@ -15,7 +15,6 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.os.Process
 import android.os.SystemClock
 import android.view.Gravity
 import android.view.KeyEvent
@@ -155,7 +154,10 @@ class MainActivity : AppCompatActivity() {
     private var touchMoveScheduled = false
     private var pendingTouchMove: PendingTouchMove? = null
     private val touchPointerSlots = mutableMapOf<Int, Int>()
-    private val touchSender = TouchSender()
+    private var directTouchSent = 0L
+    private var directTouchRejected = 0L
+    private var directTouchMaxSendMs = 0L
+    private var directTouchLastLogMs = 0L
     private val prefs by lazy { getSharedPreferences("transport_prefs", MODE_PRIVATE) }
     private val aoapPrefs by lazy { getSharedPreferences(Constants.AOAP_PREFS, MODE_PRIVATE) }
     private val projectionPrefs by lazy { getSharedPreferences(Constants.PROJECTION_PREFS, MODE_PRIVATE) }
@@ -733,7 +735,6 @@ class MainActivity : AppCompatActivity() {
         AaProjectionSink.release()
         mediaSession?.release()
         mediaSession = null
-        touchSender.stop()
     }
 
     private fun updateWifiStatus() {
@@ -1786,195 +1787,33 @@ class MainActivity : AppCompatActivity() {
     private fun sendTouchPoints(action: Int, actionIndex: Int, points: List<TouchPoint>) {
         val p0 = points.getOrNull(0)
         val p1 = points.getOrNull(1)
-        queueAaTouchSend(
-            action = action,
-            actionIndex = actionIndex,
-            pointerCount = points.size,
-            x0 = p0?.x ?: 0,
-            y0 = p0?.y ?: 0,
-            pointerId0 = (p0?.slot ?: 0) + 1,
-            x1 = p1?.x ?: 0,
-            y1 = p1?.y ?: 0,
-            pointerId1 = (p1?.slot ?: 1) + 1
+        val beforeMs = SystemClock.elapsedRealtime()
+        val ok = AasdkNative.nativeSendTouchMulti(
+            action,
+            actionIndex,
+            points.size,
+            p0?.x ?: 0,
+            p0?.y ?: 0,
+            (p0?.slot ?: 0) + 1,
+            p1?.x ?: 0,
+            p1?.y ?: 0,
+            (p1?.slot ?: 1) + 1
         )
-    }
-
-    private fun queueAaTouchSend(
-        action: Int,
-        actionIndex: Int,
-        pointerCount: Int,
-        x0: Int,
-        y0: Int,
-        pointerId0: Int,
-        x1: Int,
-        y1: Int,
-        pointerId1: Int
-    ) {
-        touchSender.enqueue(
-            TouchCommand(
-                action = action,
-                actionIndex = actionIndex,
-                pointerCount = pointerCount,
-                x0 = x0,
-                y0 = y0,
-                pointerId0 = pointerId0,
-                x1 = x1,
-                y1 = y1,
-                pointerId1 = pointerId1
-            )
-        )
-    }
-
-    private data class TouchCommand(
-        val action: Int,
-        val actionIndex: Int,
-        val pointerCount: Int,
-        val x0: Int,
-        val y0: Int,
-        val pointerId0: Int,
-        val x1: Int,
-        val y1: Int,
-        val pointerId1: Int
-    )
-
-    private inner class TouchSender {
-        private val lock = Object()
-        private val immediateQueue = ArrayDeque<TouchCommand>()
-        private var latestMove: TouchCommand? = null
-        private var running = true
-        private var droppedMoves = 0L
-        private var rejectedSends = 0L
-        private var sentEvents = 0L
-        private var maxSendMs = 0L
-        private var lastSendMs = 0L
-        private var lastMoveSentMs = 0L
-        private var touchBackoffUntilMs = 0L
-        private var lastStatsLogMs = 0L
-        private val worker = Thread({ loop() }, "aa-touch-coalesce").apply {
-            isDaemon = true
-            start()
+        val durationMs = SystemClock.elapsedRealtime() - beforeMs
+        directTouchSent += 1
+        directTouchMaxSendMs = maxOf(directTouchMaxSendMs, durationMs)
+        if (!ok) {
+            directTouchRejected += 1
         }
-
-        fun enqueue(command: TouchCommand) {
-            synchronized(lock) {
-                if (!running) {
-                    return
-                }
-                if (command.action == MotionEvent.ACTION_MOVE) {
-                    if (latestMove != null) {
-                        droppedMoves += 1
-                    }
-                    latestMove = command
-                } else {
-                    if (isTouchReleaseAction(command.action)) {
-                        latestMove = null
-                    }
-                    while (immediateQueue.size >= MAX_TOUCH_IMMEDIATE_QUEUE) {
-                        immediateQueue.removeFirst()
-                    }
-                    immediateQueue.addLast(command)
-                }
-                lock.notifyAll()
-            }
-        }
-
-        fun stop() {
-            synchronized(lock) {
-                running = false
-                immediateQueue.clear()
-                latestMove = null
-                lock.notifyAll()
-            }
-            worker.interrupt()
-        }
-
-        private fun loop() {
-            try {
-                Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
-                while (true) {
-                    val command = nextCommand() ?: return
-                    val beforeMs = SystemClock.elapsedRealtime()
-                    val ok = AasdkNative.nativeSendTouchMulti(
-                        command.action,
-                        command.actionIndex,
-                        command.pointerCount,
-                        command.x0,
-                        command.y0,
-                        command.pointerId0,
-                        command.x1,
-                        command.y1,
-                        command.pointerId1
-                    )
-                    val durationMs = SystemClock.elapsedRealtime() - beforeMs
-                    synchronized(lock) {
-                        sentEvents += 1
-                        lastSendMs = durationMs
-                        maxSendMs = maxOf(maxSendMs, durationMs)
-                        if (!ok) {
-                            rejectedSends += 1
-                            if (command.action == MotionEvent.ACTION_MOVE) {
-                                touchBackoffUntilMs = SystemClock.elapsedRealtime() + TOUCH_SEND_BACKOFF_MS
-                            }
-                            maybeLogLocked("send_rejected", force = rejectedSends <= 8L)
-                        } else if (durationMs >= TOUCH_SEND_STALL_LOG_MS) {
-                            reportLocked("slow_send_${durationMs}ms")
-                        } else {
-                            maybeLogLocked("send")
-                        }
-                    }
-                }
-            } catch (_: InterruptedException) {
-            } catch (ex: Throwable) {
-                AasdkNative.nativeReportProjectionStats(
-                    "touch worker stopped thread=${Thread.currentThread().name} " +
-                        "${ex.javaClass.simpleName}: ${ex.message}"
-                )
-            }
-        }
-
-        private fun nextCommand(): TouchCommand? {
-            synchronized(lock) {
-                while (running) {
-                    if (immediateQueue.isNotEmpty()) {
-                        return immediateQueue.removeFirst()
-                    }
-                    val move = latestMove
-                    if (move != null) {
-                        val nowMs = SystemClock.elapsedRealtime()
-                        val intervalWaitMs = TOUCH_SEND_MOVE_INTERVAL_MS - (nowMs - lastMoveSentMs)
-                        val backoffWaitMs = touchBackoffUntilMs - nowMs
-                        val waitMs = maxOf(intervalWaitMs, backoffWaitMs)
-                        if (waitMs <= 0L) {
-                            latestMove = null
-                            lastMoveSentMs = nowMs
-                            return move
-                        }
-                        lock.wait(waitMs)
-                    } else {
-                        lock.wait()
-                    }
-                }
-                return null
-            }
-        }
-
-        private fun maybeLogLocked(reason: String, force: Boolean = false) {
-            val nowMs = SystemClock.elapsedRealtime()
-            if (force || sentEvents <= 8L || nowMs - lastStatsLogMs >= 5_000L ||
-                (droppedMoves > 0L && droppedMoves % 100L == 0L)
-            ) {
-                lastStatsLogMs = nowMs
-                reportLocked(reason)
-            }
-        }
-
-        private fun reportLocked(reason: String) {
+        val nowMs = SystemClock.elapsedRealtime()
+        if (!ok || directTouchSent <= 8L || durationMs >= TOUCH_SEND_STALL_LOG_MS ||
+            nowMs - directTouchLastLogMs >= 5_000L
+        ) {
+            directTouchLastLogMs = nowMs
             AasdkNative.nativeReportProjectionStats(
-                "touch reason=$reason thread=${Thread.currentThread().name} sent=$sentEvents " +
-                    "droppedMoves=$droppedMoves rejectedSends=$rejectedSends " +
-                    "immediateDepth=${immediateQueue.size} pendingMove=${latestMove != null} " +
-                    "backoffMs=${(touchBackoffUntilMs - SystemClock.elapsedRealtime()).coerceAtLeast(0L)} " +
-                    "lastSendMs=$lastSendMs maxSendMs=$maxSendMs"
+                "touch direct thread=${Thread.currentThread().name} sent=$directTouchSent " +
+                    "rejected=$directTouchRejected lastSendMs=$durationMs maxSendMs=$directTouchMaxSendMs " +
+                    "action=$action pointers=${points.size}"
             )
         }
     }
@@ -2333,10 +2172,7 @@ class MainActivity : AppCompatActivity() {
         const val AA_KEYCODE_MEDIA_STOP = 86
         const val TOUCH_MOVE_INTERVAL_MS = 0L
         const val TOUCH_MULTI_MOVE_INTERVAL_MS = 0L
-        const val TOUCH_SEND_MOVE_INTERVAL_MS = 0L
-        const val TOUCH_SEND_BACKOFF_MS = 16L
         const val TOUCH_SEND_STALL_LOG_MS = 12L
         const val TOUCH_MOVE_DEAD_ZONE_PX = 1
-        const val MAX_TOUCH_IMMEDIATE_QUEUE = 16
     }
 }
