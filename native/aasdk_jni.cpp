@@ -1905,13 +1905,13 @@ private:
         auto* video_config = video_channel->add_video_configs();
         const auto videoConfig = currentVideoConfig();
         video_config->set_video_resolution(videoConfig.resolution);
-        video_config->set_video_fps(proto::enums::VideoFPS::_30);
+        video_config->set_video_fps(proto::enums::VideoFPS::_60);
         video_config->set_margin_width(static_cast<uint32_t>(videoConfig.margin_width));
         video_config->set_margin_height(static_cast<uint32_t>(videoConfig.margin_height));
         video_config->set_dpi(160);
         video_config->set_additional_depth(0);
         native_log::Logf(LOG_TAG, "I",
-                         "AA video config active=%dx%d frame=%dx%d margins=%dx%d",
+                         "AA video config active=%dx%d frame=%dx%d margins=%dx%d fps=60",
                          videoConfig.width,
                          videoConfig.height,
                          videoConfig.frame_width,
