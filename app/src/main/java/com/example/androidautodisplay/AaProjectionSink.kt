@@ -725,7 +725,7 @@ object AaProjectionSink : SurfaceHolder.Callback {
             running = true
             worker = thread(name = "aa-audio-$label", start = true) {
                 runCatching {
-                    Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
+                    Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
                 }.onFailure {
                     AasdkNative.nativeReportProjectionStats(
                         "audio[$label] priority failed thread=${Thread.currentThread().name}: ${it.message}"

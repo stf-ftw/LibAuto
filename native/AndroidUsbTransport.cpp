@@ -3,7 +3,12 @@
 #include <algorithm>
 #include <android/log.h>
 #include <chrono>
+#include <cerrno>
+#include <cstring>
+#include <sys/resource.h>
+#include <sys/syscall.h>
 #include <thread>
+#include <unistd.h>
 
 #include <f1x/aasdk/Error/Error.hpp>
 
@@ -11,6 +16,18 @@
 
 namespace {
 constexpr const char* kLogTag = "AndroidUsbTransport";
+
+void boostCurrentThreadPriority(const char* label) {
+    const auto tid = static_cast<int>(syscall(__NR_gettid));
+    errno = 0;
+    if (setpriority(PRIO_PROCESS, tid, -16) != 0) {
+        native_log::Logf(kLogTag, "W",
+                         "%s priority boost failed tid=%d errno=%d %s",
+                         label, tid, errno, strerror(errno));
+        return;
+    }
+    native_log::Logf(kLogTag, "I", "%s priority boosted tid=%d nice=-16", label, tid);
+}
 }
 
 AndroidUsbTransport::AndroidUsbTransport(boost::asio::io_service& ioService)
@@ -75,6 +92,7 @@ void AndroidUsbTransport::doSend(SendQueue::iterator queueElement,
 }
 
 void AndroidUsbTransport::readLoop() {
+    boostCurrentThreadPriority("USB read");
     while (running_.load()) {
         std::optional<f1x::aasdk::common::DataBuffer> buffer;
         {
@@ -144,6 +162,7 @@ void AndroidUsbTransport::readLoop() {
 }
 
 void AndroidUsbTransport::sendLoop() {
+    boostCurrentThreadPriority("USB send");
     while (running_.load()) {
         SendQueue::iterator queueElement;
         f1x::aasdk::common::Data::size_type currentOffset = 0;

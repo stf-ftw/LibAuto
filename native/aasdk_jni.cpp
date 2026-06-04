@@ -11,6 +11,8 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <sys/resource.h>
+#include <sys/syscall.h>
 #include <thread>
 #include <time.h>
 #include <unwind.h>
@@ -677,6 +679,18 @@ uint64_t monotonicNanos() {
     }
     return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL +
            static_cast<uint64_t>(ts.tv_nsec);
+}
+
+void boostCurrentThreadPriority(const char* label, int nice_value = -16) {
+    const auto tid = static_cast<int>(syscall(__NR_gettid));
+    errno = 0;
+    if (setpriority(PRIO_PROCESS, tid, nice_value) != 0) {
+        native_log::Logf(LOG_TAG, "W",
+                         "%s priority boost failed tid=%d nice=%d errno=%d %s",
+                         label, tid, nice_value, errno, strerror(errno));
+        return;
+    }
+    native_log::Logf(LOG_TAG, "I", "%s priority boosted tid=%d nice=%d", label, tid, nice_value);
 }
 
 proto::enums::TouchAction_Enum toTouchAction(int32_t action) {
@@ -2147,6 +2161,7 @@ bool startAaSessionWithTransport(
     session->bluetooth->receive(session->bluetooth_handler);
     session->control->receive(session->control_handler);
     session->io_thread = std::thread([session]() {
+        boostCurrentThreadPriority("AA io");
         session->io.run();
     });
 
