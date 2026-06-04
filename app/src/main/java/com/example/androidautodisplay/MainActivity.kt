@@ -1764,10 +1764,10 @@ class MainActivity : AppCompatActivity() {
             pointerCount = points.size,
             x0 = p0?.x ?: 0,
             y0 = p0?.y ?: 0,
-            pointerId0 = p0?.slot ?: 0,
+            pointerId0 = (p0?.slot ?: 0) + 1,
             x1 = p1?.x ?: 0,
             y1 = p1?.y ?: 0,
-            pointerId1 = p1?.slot ?: 1
+            pointerId1 = (p1?.slot ?: 1) + 1
         )
     }
 
