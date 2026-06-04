@@ -175,6 +175,18 @@ std::atomic<int32_t> g_video_resolution{
 std::atomic<int32_t> g_video_fps{60};
 std::atomic<int32_t> g_touch_in_flight{0};
 
+// Modern Android Auto protocol definitions use _60=1 and _30=2. The vendored
+// AASDK v2 proto labels those numeric values in the opposite order, so choose
+// the numeric value modern Gearhead expects instead of trusting the old labels.
+constexpr bool kUseModernVideoFpsEnumMapping = true;
+
+proto::enums::VideoFPS::Enum videoFpsEnumForRequestedRate(int fps) {
+    if (kUseModernVideoFpsEnumMapping) {
+        return fps == 30 ? proto::enums::VideoFPS::_60 : proto::enums::VideoFPS::_30;
+    }
+    return fps == 30 ? proto::enums::VideoFPS::_30 : proto::enums::VideoFPS::_60;
+}
+
 struct VideoConfigInfo {
     uint32_t config_index;
     int width;
@@ -1920,22 +1932,24 @@ private:
         auto* video_config = video_channel->add_video_configs();
         const auto videoConfig = currentVideoConfig();
         const auto fps = g_video_fps.load() == 30 ? 30 : 60;
+        const auto fpsEnum = videoFpsEnumForRequestedRate(fps);
         video_config->set_video_resolution(videoConfig.resolution);
-        video_config->set_video_fps(
-            fps == 30 ? proto::enums::VideoFPS::_30 : proto::enums::VideoFPS::_60);
+        video_config->set_video_fps(fpsEnum);
         video_config->set_margin_width(static_cast<uint32_t>(videoConfig.margin_width));
         video_config->set_margin_height(static_cast<uint32_t>(videoConfig.margin_height));
         video_config->set_dpi(160);
         video_config->set_additional_depth(0);
         native_log::Logf(LOG_TAG, "I",
-                         "AA video config active=%dx%d frame=%dx%d margins=%dx%d fps=%d",
+                         "AA video config active=%dx%d frame=%dx%d margins=%dx%d fps=%d fpsEnum=%d fpsMapping=%s",
                          videoConfig.width,
                          videoConfig.height,
                          videoConfig.frame_width,
                          videoConfig.frame_height,
                          videoConfig.margin_width,
                          videoConfig.margin_height,
-                         fps);
+                         fps,
+                         static_cast<int>(fpsEnum),
+                         kUseModernVideoFpsEnumMapping ? "modern" : "aasdk");
 
         auto* audio_descriptor = response.add_channels();
         audio_descriptor->set_channel_id(static_cast<uint32_t>(messenger::ChannelId::MEDIA_AUDIO));
