@@ -2,8 +2,8 @@
 
 Current release build:
 
-- Version name: `0.5`
-- Version code: `5`
+- Version name: `0.6`
+- Version code: `6`
 - Application id: `ro.stf_ftw.libauto`
 - Minimum SDK: 26
 - ABIs: `armeabi-v7a`, `arm64-v8a`
@@ -51,13 +51,14 @@ Download `LibAuto-standard.apk` first.
 
 If it does not install or crashes immediately on an older/Chinese Android head unit, try `LibAuto-legacy-headunit.apk` instead.
 
-## Changes Since v0.4
+## Changes Since v0.5
 
-- Restored reliable two-finger gesture forwarding by preserving Android Auto's raw multi-touch pointer actions.
-- Fixed intermittent green/macroblock video corruption by feeding H.264 frames to the decoder in reference order and waiting for a clean keyframe after queue recovery.
-- Added the missing stop, rewind, and fast-forward actions to the media-key learner and Android media-session bridge.
-- Shortened the native USB idle fallback so missed unplug events return to the launcher faster.
-- Hid the experimental wireless Android Auto controls from the launcher while wireless support remains under development.
+- Added a projection frame-rate selector with `30 fps` and `60 fps` options.
+- Kept `60 fps` as the default because it improved projection cadence in testing.
+- Continued touch/video pipeline tuning after v0.5; touch forwarding is functional, but drag and pinch-to-zoom can still feel sluggish or choppy on some devices.
+- Media control key support is still experimental and may not work on every head unit.
+- Wireless Android Auto remains in progress and is not exposed as a normal launcher flow yet.
+- Development updates may be slower for the next four weeks while the maintainer is in an exam session.
 
 ## Notes
 
