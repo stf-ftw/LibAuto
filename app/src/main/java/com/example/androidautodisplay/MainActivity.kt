@@ -58,6 +58,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var projectionStatus: TextView
     private lateinit var usbDeviceList: LinearLayout
     private lateinit var projectionResolutionGroup: RadioGroup
+    private lateinit var projectionFpsGroup: RadioGroup
     private lateinit var projectionNativeAspectCheckbox: CheckBox
     private lateinit var autoConnectCheckbox: CheckBox
     private lateinit var mediaKeySettingsButton: ImageButton
@@ -420,6 +421,7 @@ class MainActivity : AppCompatActivity() {
         projectionStatus = findViewById(R.id.projection_status)
         usbDeviceList = findViewById(R.id.usb_device_list)
         projectionResolutionGroup = findViewById(R.id.projection_resolution_group)
+        projectionFpsGroup = findViewById(R.id.projection_fps_group)
         projectionNativeAspectCheckbox = findViewById(R.id.projection_native_aspect_checkbox)
         autoConnectCheckbox = findViewById(R.id.autoconnect_checkbox)
         mediaKeySettingsButton = findViewById(R.id.media_key_settings_button)
@@ -803,6 +805,8 @@ class MainActivity : AppCompatActivity() {
         projectionNativeAspectCheckbox.isChecked = useNativeProjectionAspect()
         projectionResolutionGroup.check(selected.radioId)
         applyProjectionResolution(selected)
+        projectionFpsGroup.check(radioIdForProjectionFps(selectedProjectionFps()))
+        applyProjectionFps(selectedProjectionFps())
         projectionResolutionGroup.setOnCheckedChangeListener { _, checkedId ->
             val resolution = projectionResolutions.firstOrNull { it.radioId == checkedId }
                 ?: selectedProjectionResolution()
@@ -816,6 +820,13 @@ class MainActivity : AppCompatActivity() {
                 .putBoolean(Constants.PROJECTION_NATIVE_ASPECT, isChecked)
                 .apply()
             applyProjectionResolution(selectedProjectionResolution())
+        }
+        projectionFpsGroup.setOnCheckedChangeListener { _, checkedId ->
+            val fps = projectionFpsForRadioId(checkedId)
+            projectionPrefs.edit()
+                .putInt(Constants.PROJECTION_FPS, fps)
+                .apply()
+            applyProjectionFps(fps)
         }
     }
 
@@ -835,6 +846,23 @@ class MainActivity : AppCompatActivity() {
 
     private fun useNativeProjectionAspect(): Boolean {
         return projectionPrefs.getBoolean(Constants.PROJECTION_NATIVE_ASPECT, false)
+    }
+
+    private fun selectedProjectionFps(): Int {
+        val fps = projectionPrefs.getInt(Constants.PROJECTION_FPS, Constants.DEFAULT_PROJECTION_FPS)
+        return if (fps == 30 || fps == 60) fps else Constants.DEFAULT_PROJECTION_FPS
+    }
+
+    private fun projectionFpsForRadioId(radioId: Int): Int {
+        return if (radioId == R.id.projection_fps_30) 30 else 60
+    }
+
+    private fun radioIdForProjectionFps(fps: Int): Int {
+        return if (fps == 30) R.id.projection_fps_30 else R.id.projection_fps_60
+    }
+
+    private fun applyProjectionFps(fps: Int) {
+        AasdkNative.nativeSetVideoFps(if (fps == 30) 30 else 60)
     }
 
     private fun configureAutoConnect() {

@@ -13,6 +13,9 @@
     <string name="projection_resolution_480p">480p</string>
     <string name="projection_resolution_720p">720p</string>
     <string name="projection_resolution_1080p">1080p</string>
+    <string name="projection_fps_title">Projection frame rate</string>
+    <string name="projection_fps_30">30 fps</string>
+    <string name="projection_fps_60">60 fps</string>
     <string name="projection_native_aspect">Use native screen aspect</string>
     <string name="start_session">Start session</string>
     <string name="stop_session">Stop session</string>

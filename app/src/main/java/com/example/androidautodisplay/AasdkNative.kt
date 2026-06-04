@@ -20,6 +20,7 @@ object AasdkNative {
         marginHeight: Int,
         resolutionCode: Int
     )
+    external fun nativeSetVideoFps(fps: Int)
     external fun nativeSetMicrophonePermission(granted: Boolean)
     external fun nativeReportProjectionStats(message: String)
     external fun nativeOnCarSpeed(speedMetersPerSecond: Float): Boolean

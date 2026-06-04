@@ -124,6 +124,55 @@
                             android:textStyle="bold" />
                     </RadioGroup>
 
+                    <TextView
+                        android:id="@+id/projection_fps_title"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="14dp"
+                        android:letterSpacing="0.14"
+                        android:text="@string/projection_fps_title"
+                        android:textAllCaps="true"
+                        android:textColor="@color/libauto_muted"
+                        android:textSize="11sp"
+                        android:textStyle="bold" />
+
+                    <RadioGroup
+                        android:id="@+id/projection_fps_group"
+                        android:layout_width="match_parent"
+                        android:layout_height="40dp"
+                        android:layout_marginTop="12dp"
+                        android:background="@drawable/segmented_bg"
+                        android:gravity="center"
+                        android:orientation="horizontal"
+                        android:padding="3dp">
+
+                        <RadioButton
+                            android:id="@+id/projection_fps_30"
+                            android:layout_width="0dp"
+                            android:layout_height="match_parent"
+                            android:layout_weight="1"
+                            android:background="@drawable/projection_segment_selector"
+                            android:button="@null"
+                            android:gravity="center"
+                            android:text="@string/projection_fps_30"
+                            android:textColor="@color/projection_segment_text"
+                            android:textSize="14sp"
+                            android:textStyle="bold" />
+
+                        <RadioButton
+                            android:id="@+id/projection_fps_60"
+                            android:layout_width="0dp"
+                            android:layout_height="match_parent"
+                            android:layout_weight="1"
+                            android:background="@drawable/projection_segment_selector"
+                            android:button="@null"
+                            android:gravity="center"
+                            android:text="@string/projection_fps_60"
+                            android:textColor="@color/projection_segment_text"
+                            android:textSize="14sp"
+                            android:textStyle="bold" />
+                    </RadioGroup>
+
                     <CheckBox
                         android:id="@+id/projection_native_aspect_checkbox"
                         android:layout_width="wrap_content"

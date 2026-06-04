@@ -170,6 +170,7 @@ std::atomic<int32_t> g_video_margin_height{0};
 std::atomic<int32_t> g_video_resolution{
     static_cast<int32_t>(proto::enums::VideoResolution::_720p)
 };
+std::atomic<int32_t> g_video_fps{60};
 std::atomic<int32_t> g_touch_in_flight{0};
 
 struct VideoConfigInfo {
@@ -1904,20 +1905,23 @@ private:
         video_channel->set_available_while_in_call(true);
         auto* video_config = video_channel->add_video_configs();
         const auto videoConfig = currentVideoConfig();
+        const auto fps = g_video_fps.load() == 30 ? 30 : 60;
         video_config->set_video_resolution(videoConfig.resolution);
-        video_config->set_video_fps(proto::enums::VideoFPS::_60);
+        video_config->set_video_fps(
+            fps == 30 ? proto::enums::VideoFPS::_30 : proto::enums::VideoFPS::_60);
         video_config->set_margin_width(static_cast<uint32_t>(videoConfig.margin_width));
         video_config->set_margin_height(static_cast<uint32_t>(videoConfig.margin_height));
         video_config->set_dpi(160);
         video_config->set_additional_depth(0);
         native_log::Logf(LOG_TAG, "I",
-                         "AA video config active=%dx%d frame=%dx%d margins=%dx%d fps=60",
+                         "AA video config active=%dx%d frame=%dx%d margins=%dx%d fps=%d",
                          videoConfig.width,
                          videoConfig.height,
                          videoConfig.frame_width,
                          videoConfig.frame_height,
                          videoConfig.margin_width,
-                         videoConfig.margin_height);
+                         videoConfig.margin_height,
+                         fps);
 
         auto* audio_descriptor = response.add_channels();
         audio_descriptor->set_channel_id(static_cast<uint32_t>(messenger::ChannelId::MEDIA_AUDIO));
@@ -2391,6 +2395,16 @@ Java_com_example_androidautodisplay_AasdkNative_nativeSetVideoResolution(
                      static_cast<int>(marginWidth),
                      static_cast<int>(marginHeight),
                      static_cast<int>(resolution));
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_example_androidautodisplay_AasdkNative_nativeSetVideoFps(
+    JNIEnv*,
+    jobject,
+    jint fps) {
+    const int32_t sanitized = fps == 30 ? 30 : 60;
+    g_video_fps.store(sanitized);
+    native_log::Logf(LOG_TAG, "I", "AA video fps set fps=%d", static_cast<int>(sanitized));
 }
 
 extern "C" JNIEXPORT void JNICALL

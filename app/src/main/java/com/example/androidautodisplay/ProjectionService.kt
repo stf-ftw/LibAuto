@@ -556,6 +556,8 @@ class ProjectionService : Service() {
         val prefs = getSharedPreferences(Constants.PROJECTION_PREFS, MODE_PRIVATE)
         val key = prefs.getString(Constants.PROJECTION_RESOLUTION, Constants.DEFAULT_PROJECTION_RESOLUTION)
         val useNativeAspect = prefs.getBoolean(Constants.PROJECTION_NATIVE_ASPECT, false)
+        val fps = prefs.getInt(Constants.PROJECTION_FPS, Constants.DEFAULT_PROJECTION_FPS)
+            .let { if (it == 30 || it == 60) it else Constants.DEFAULT_PROJECTION_FPS }
         val resolution = ProjectionResolutionOptions.resolve(this, key, useNativeAspect)
         AasdkNative.nativeSetVideoResolution(
             resolution.width,
@@ -566,10 +568,11 @@ class ProjectionService : Service() {
             resolution.marginHeight,
             resolution.nativeCode
         )
+        AasdkNative.nativeSetVideoFps(fps)
         appendUsbLog(
             "Projection resolution: active=${resolution.width}x${resolution.height} " +
                 "frame=${resolution.frameWidth}x${resolution.frameHeight} " +
-                "margins=${resolution.marginWidth}x${resolution.marginHeight}"
+                "margins=${resolution.marginWidth}x${resolution.marginHeight} fps=$fps"
         )
     }
 

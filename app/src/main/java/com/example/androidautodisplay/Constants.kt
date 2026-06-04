@@ -71,11 +71,13 @@ object Constants {
     const val PROJECTION_PREFS = "projection_prefs"
     const val PROJECTION_RESOLUTION = "projection_resolution"
     const val PROJECTION_NATIVE_ASPECT = "projection_native_aspect"
+    const val PROJECTION_FPS = "projection_fps"
     const val AUTOCONNECT_SINGLE_DEVICE = "autoconnect_single_device"
     const val PROJECTION_RESOLUTION_480P = "480p"
     const val PROJECTION_RESOLUTION_720P = "720p"
     const val PROJECTION_RESOLUTION_1080P = "1080p"
     const val DEFAULT_PROJECTION_RESOLUTION = PROJECTION_RESOLUTION_720P
+    const val DEFAULT_PROJECTION_FPS = 60
 
     const val DEFAULT_AOAP_MANUFACTURER = "Android"
     const val DEFAULT_AOAP_MODEL = "Android Auto"
