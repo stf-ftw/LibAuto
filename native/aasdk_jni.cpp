@@ -163,6 +163,13 @@ std::atomic<uint64_t> g_touch_drop_count{0};
 std::atomic<uint64_t> g_touch_coalesce_count{0};
 std::atomic<uint64_t> g_button_event_count{0};
 std::atomic<uint64_t> g_video_frame_count{0};
+std::chrono::steady_clock::time_point g_video_cadence_last_frame;
+std::chrono::steady_clock::time_point g_video_cadence_window_start;
+uint64_t g_video_cadence_window_frames = 0;
+uint64_t g_video_cadence_over_25ms = 0;
+uint64_t g_video_cadence_over_33ms = 0;
+uint64_t g_video_cadence_over_50ms = 0;
+int64_t g_video_cadence_max_gap_us = 0;
 std::atomic<int32_t> g_video_width{kDefaultVideoWidth};
 std::atomic<int32_t> g_video_height{kDefaultVideoHeight};
 std::atomic<int32_t> g_video_frame_width{kDefaultVideoWidth};
@@ -185,6 +192,65 @@ proto::enums::VideoFPS::Enum videoFpsEnumForRequestedRate(int fps) {
         return fps == 30 ? proto::enums::VideoFPS::_60 : proto::enums::VideoFPS::_30;
     }
     return fps == 30 ? proto::enums::VideoFPS::_30 : proto::enums::VideoFPS::_60;
+}
+
+void resetVideoCadenceStats() {
+    g_video_cadence_last_frame = {};
+    g_video_cadence_window_start = {};
+    g_video_cadence_window_frames = 0;
+    g_video_cadence_over_25ms = 0;
+    g_video_cadence_over_33ms = 0;
+    g_video_cadence_over_50ms = 0;
+    g_video_cadence_max_gap_us = 0;
+}
+
+void recordVideoCadence(uint64_t count) {
+    const auto now = std::chrono::steady_clock::now();
+    if (g_video_cadence_window_start.time_since_epoch().count() == 0) {
+        g_video_cadence_window_start = now;
+    }
+    if (g_video_cadence_last_frame.time_since_epoch().count() != 0) {
+        const auto gap_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            now - g_video_cadence_last_frame).count();
+        if (gap_us > g_video_cadence_max_gap_us) {
+            g_video_cadence_max_gap_us = gap_us;
+        }
+        if (gap_us > 25000) {
+            g_video_cadence_over_25ms += 1;
+        }
+        if (gap_us > 33000) {
+            g_video_cadence_over_33ms += 1;
+        }
+        if (gap_us > 50000) {
+            g_video_cadence_over_50ms += 1;
+        }
+    }
+    g_video_cadence_last_frame = now;
+    g_video_cadence_window_frames += 1;
+    if (count % 600 != 0) {
+        return;
+    }
+    const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now - g_video_cadence_window_start).count();
+    const double fps = elapsed_ms > 0
+        ? (static_cast<double>(g_video_cadence_window_frames) * 1000.0 / static_cast<double>(elapsed_ms))
+        : 0.0;
+    native_log::Logf(LOG_TAG,
+                     "I",
+                     "AA video cadence frames=%llu windowMs=%lld fps=%.2f maxGapMs=%.2f gaps25=%llu gaps33=%llu gaps50=%llu",
+                     static_cast<unsigned long long>(g_video_cadence_window_frames),
+                     static_cast<long long>(elapsed_ms),
+                     fps,
+                     static_cast<double>(g_video_cadence_max_gap_us) / 1000.0,
+                     static_cast<unsigned long long>(g_video_cadence_over_25ms),
+                     static_cast<unsigned long long>(g_video_cadence_over_33ms),
+                     static_cast<unsigned long long>(g_video_cadence_over_50ms));
+    g_video_cadence_window_start = now;
+    g_video_cadence_window_frames = 0;
+    g_video_cadence_over_25ms = 0;
+    g_video_cadence_over_33ms = 0;
+    g_video_cadence_over_50ms = 0;
+    g_video_cadence_max_gap_us = 0;
 }
 
 struct VideoConfigInfo {
@@ -325,6 +391,7 @@ void stopVideoSink() {
 
 void pushVideoFrame(const common::DataConstBuffer& payload, int64_t pts_us) {
     const auto count = g_video_frame_count.fetch_add(1) + 1;
+    recordVideoCadence(count);
     if (payload.cdata == nullptr || payload.size == 0) {
         native_log::Logf(LOG_TAG, "W",
                          "AA video frame skipped empty count=%llu",
@@ -342,8 +409,6 @@ void pushVideoFrame(const common::DataConstBuffer& payload, int64_t pts_us) {
     if (holder.env == nullptr || !ensureProjectionSink(holder.env)) {
         return;
     }
-    std::vector<jbyte> copy(payload.size);
-    std::memcpy(copy.data(), payload.cdata, payload.size);
     jbyteArray arr = holder.env->NewByteArray(static_cast<jsize>(payload.size));
     if (arr == nullptr) {
         native_log::Log(LOG_TAG, "E", "AA video frame NewByteArray failed");
@@ -357,7 +422,7 @@ void pushVideoFrame(const common::DataConstBuffer& payload, int64_t pts_us) {
         arr,
         0,
         static_cast<jsize>(payload.size),
-        copy.data()
+        reinterpret_cast<const jbyte*>(payload.cdata)
     );
     holder.env->CallStaticVoidMethod(g_projection_sink_class, g_push_video, arr, static_cast<jlong>(pts_us));
     holder.env->DeleteLocalRef(arr);
@@ -2105,6 +2170,7 @@ bool startAaSessionWithTransport(
     const char* label) {
     native_log::Logf(LOG_TAG, "I", "AA session starting transport=%s", label);
     g_video_frame_count.store(0);
+    resetVideoCadenceStats();
     g_touch_event_count.store(0);
     g_touch_drop_count.store(0);
     g_touch_coalesce_count.store(0);
@@ -2320,6 +2386,7 @@ void stopAaSession() {
     g_touch_event_count.store(0);
     g_button_event_count.store(0);
     g_video_frame_count.store(0);
+    resetVideoCadenceStats();
     g_touch_drop_count.store(0);
     g_touch_coalesce_count.store(0);
     resetTouchPipeline();
