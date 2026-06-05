@@ -60,6 +60,7 @@ class UsbIoController(
     private val externalReadActive = AtomicBoolean(false)
     private var readThread: Thread? = null
     private val deviceCache = linkedMapOf<String, UsbDevice>()
+    private val deviceCacheLock = Any()
     private var state = UsbState.IDLE
     private var lastSeenDeviceName: String? = null
     private var lastSeenVid = -1
@@ -248,7 +249,7 @@ class UsbIoController(
 
     fun handleDeviceDetached(device: UsbDevice) {
         logger("USB detached ${device.deviceName}")
-        deviceCache.remove(device.deviceName)
+        removeCachedDevice(device.deviceName)
         if (selectedDevice?.deviceName == device.deviceName ||
             (device.vendorId == lastSeenVid && device.productId == lastSeenPid)
         ) {
@@ -336,8 +337,7 @@ class UsbIoController(
     }
 
     fun probeEndpoints(): String {
-        updateDeviceCache()
-        val device = selectedDevice ?: deviceCache.values.firstOrNull { usbManager.hasPermission(it) }
+        val device = selectedDevice ?: cachedDevicesSnapshot().firstOrNull { usbManager.hasPermission(it) }
         if (device == null) {
             probeSummary = "Probe failed: no permitted device"
             refreshStatus()
@@ -404,8 +404,7 @@ class UsbIoController(
     fun getSnapshot(): UsbStatusSnapshot = buildSnapshot()
 
     fun selectDeviceForAa(deviceName: String): Boolean {
-        updateDeviceCache()
-        val device = deviceCache[deviceName]
+        val device = cachedDeviceByName(deviceName)
         if (device == null) {
             lastError = "Device not found: $deviceName"
             refreshStatus()
@@ -440,7 +439,7 @@ class UsbIoController(
     }
 
     fun openByDeviceName(deviceName: String): Boolean {
-        val device = deviceCache[deviceName]
+        val device = cachedDeviceByName(deviceName)
         if (device == null) {
             lastError = "Device not found: $deviceName"
             refreshStatus()
@@ -453,7 +452,7 @@ class UsbIoController(
     }
 
     fun openByVidPid(vid: Int, pid: Int): Boolean {
-        val device = deviceCache.values.firstOrNull { it.vendorId == vid && it.productId == pid }
+        val device = cachedDeviceByVidPid(vid, pid)
         if (device == null) {
             lastError = "Device not found: $vid:$pid"
             refreshStatus()
@@ -477,14 +476,19 @@ class UsbIoController(
             if (read > 0) {
                 bytesIn += read
                 lastError = null
+                var shouldRefreshStatus = false
                 if (!firstReadLogged) {
                     firstReadLogged = true
                     logger("USB first IN read len=$read timeoutMs=$timeoutMs")
+                    shouldRefreshStatus = true
                 }
                 if (state != UsbState.AA_SESSION_ACTIVE) {
                     setState(UsbState.AA_SESSION_ACTIVE)
+                    shouldRefreshStatus = true
                 }
-                refreshStatus()
+                if (shouldRefreshStatus) {
+                    refreshStatus()
+                }
             }
             read
         } catch (ex: Exception) {
@@ -536,8 +540,8 @@ class UsbIoController(
                     "USB first OUT write attempt result=$result iface=$selectedInterfaceIndex " +
                         "ep=${endpointSummary(outEp)} len=$writeLen timeoutMs=$timeoutMs"
                 )
+                refreshStatus()
             }
-            refreshStatus()
         } else if (result < 0) {
             if (result == -1) {
                 writeTimeoutCount += 1
@@ -660,8 +664,7 @@ class UsbIoController(
     }
 
     fun getDeviceSummary(): String {
-        updateDeviceCache()
-        val devices = deviceCache.values
+        val devices = cachedDevicesSnapshot()
         if (devices.isEmpty()) {
             return "No USB devices detected."
         }
@@ -674,17 +677,17 @@ class UsbIoController(
     }
 
     private fun openPreferredIfPossible() {
-        updateDeviceCache()
+        val devices = cachedDevicesSnapshot()
         val preferredName = prefs.getString("last_device_name", null)
         val preferredVid = prefs.getInt("last_vid", -1)
         val preferredPid = prefs.getInt("last_pid", -1)
         val candidate = when {
-            preferredName != null -> deviceCache[preferredName]
-            preferredVid >= 0 && preferredPid >= 0 -> deviceCache.values.firstOrNull {
+            preferredName != null -> devices.firstOrNull { it.deviceName == preferredName }
+            preferredVid >= 0 && preferredPid >= 0 -> devices.firstOrNull {
                 it.vendorId == preferredVid && it.productId == preferredPid
             }
             else -> null
-        } ?: deviceCache.values.firstOrNull()
+        } ?: devices.firstOrNull()
         if (candidate != null) {
             if (usbManager.hasPermission(candidate)) {
                 openDevice(candidate)
@@ -1158,10 +1161,7 @@ class UsbIoController(
             )
             return
         }
-        updateDeviceCache()
-        val target = deviceCache.values.firstOrNull {
-            it.vendorId == lastSeenVid && it.productId == lastSeenPid
-        } ?: return
+        val target = cachedDeviceByVidPid(lastSeenVid, lastSeenPid) ?: return
         if (usbManager.hasPermission(target)) {
             if (aoapReenumComplete || isAccessoryDevice(target)) {
                 openDevice(target)
@@ -1175,8 +1175,7 @@ class UsbIoController(
     }
 
     private fun buildSnapshot(): UsbStatusSnapshot {
-        updateDeviceCache()
-        val devices = deviceCache.values
+        val devices = cachedDevicesSnapshot()
         val devicesSummary = if (devices.isEmpty()) {
             "No USB devices"
         } else {
@@ -1238,9 +1237,9 @@ class UsbIoController(
     }
 
     private fun scanAndOpenNow() {
-        updateDeviceCache()
+        val devices = cachedDevicesSnapshot()
         if (!aoapReenumComplete) {
-            val accessory = deviceCache.values.firstOrNull { isAccessoryDevice(it) }
+            val accessory = devices.firstOrNull { isAccessoryDevice(it) }
             if (accessory != null) {
                 aoapReenumComplete = true
                 selectedDevice = accessory
@@ -1251,7 +1250,7 @@ class UsbIoController(
             startAoapPolling()
             return
         }
-        val permitted = deviceCache.values.filter { usbManager.hasPermission(it) }
+        val permitted = devices.filter { usbManager.hasPermission(it) }
         if (permitted.isNotEmpty()) {
             if (aoapReenumComplete) {
                 val target = selectedDevice ?: permitted.firstOrNull { isAccessoryDevice(it) }
@@ -1265,7 +1264,7 @@ class UsbIoController(
             refreshStatus()
             return
         }
-        if (deviceCache.isNotEmpty()) {
+        if (devices.isNotEmpty()) {
             setState(UsbState.PRE_AA)
             refreshStatus()
         }
@@ -1312,8 +1311,7 @@ class UsbIoController(
     }
 
     fun enableAccessoryMode(): Boolean {
-        updateDeviceCache()
-        val device = selectedDevice ?: deviceCache.values.firstOrNull()
+        val device = selectedDevice ?: cachedDevicesSnapshot().firstOrNull()
         return if (device != null) {
             if (isAccessoryDevice(device)) {
                 appendAoapLog("AOAP blocked: already in accessory mode")
@@ -1549,6 +1547,12 @@ class UsbIoController(
     }
 
     private fun updateDeviceCache(newDevice: UsbDevice? = null) {
+        synchronized(deviceCacheLock) {
+            updateDeviceCacheLocked(newDevice)
+        }
+    }
+
+    private fun updateDeviceCacheLocked(newDevice: UsbDevice? = null) {
         if (newDevice != null) {
             deviceCache[newDevice.deviceName] = newDevice
             return
@@ -1561,6 +1565,35 @@ class UsbIoController(
         deviceCache.clear()
         for ((name, device) in devices) {
             deviceCache[name] = device
+        }
+    }
+
+    private fun cachedDevicesSnapshot(refresh: Boolean = true): List<UsbDevice> {
+        return synchronized(deviceCacheLock) {
+            if (refresh) {
+                updateDeviceCacheLocked()
+            }
+            deviceCache.values.toList()
+        }
+    }
+
+    private fun cachedDeviceByName(deviceName: String): UsbDevice? {
+        return synchronized(deviceCacheLock) {
+            updateDeviceCacheLocked()
+            deviceCache[deviceName]
+        }
+    }
+
+    private fun cachedDeviceByVidPid(vid: Int, pid: Int): UsbDevice? {
+        return synchronized(deviceCacheLock) {
+            updateDeviceCacheLocked()
+            deviceCache.values.firstOrNull { it.vendorId == vid && it.productId == pid }
+        }
+    }
+
+    private fun removeCachedDevice(deviceName: String) {
+        synchronized(deviceCacheLock) {
+            deviceCache.remove(deviceName)
         }
     }
 
