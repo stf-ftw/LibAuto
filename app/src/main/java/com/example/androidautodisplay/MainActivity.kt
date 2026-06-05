@@ -117,6 +117,11 @@ class MainActivity : AppCompatActivity() {
     private var pendingProjectionCloseReason: String? = null
     private var lastLoggedProjectionUsbState: String? = null
     private val projectionCloseHandler = Handler(Looper.getMainLooper())
+    private val systemUiHandler = Handler(Looper.getMainLooper())
+    private val delayedSystemUiHide = Runnable {
+        hideSystemUi()
+    }
+    private var lastSystemUiReclaimMs = 0L
     private val delayedProjectionClose = Runnable {
         pendingProjectionCloseReason = null
         showLauncherScreen()
@@ -417,6 +422,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         LogFileHelper.appendEvent(this, "MainActivity", "onCreate")
         setContentView(R.layout.activity_main)
+        configureFullscreenWindow()
 
         launcherContainer = findViewById(R.id.launcher_container)
         projectionContainer = findViewById(R.id.projection_container)
@@ -699,13 +705,13 @@ class MainActivity : AppCompatActivity() {
             })
             statusReceiverRegistered = true
         }
-        hideSystemUi()
+        reclaimSystemUi()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) {
-            hideSystemUi()
+            reclaimSystemUi()
             if (projectionContainer.visibility == View.VISIBLE) {
                 updateVideoSurfaceLayout()
             }
@@ -730,6 +736,7 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         LogFileHelper.appendEvent(this, "MainActivity", "onDestroy")
         CarSensorBridge.stop()
+        systemUiHandler.removeCallbacks(delayedSystemUiHide)
         videoSink.stop()
         audioSink.stop()
         AaProjectionSink.release()
@@ -1144,7 +1151,7 @@ class MainActivity : AppCompatActivity() {
         videoSurface.visibility = View.VISIBLE
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         updateVideoSurfaceLayout()
-        hideSystemUi()
+        reclaimSystemUi()
     }
 
     private fun showLauncherScreen() {
@@ -1166,7 +1173,7 @@ class MainActivity : AppCompatActivity() {
         projectionStatus.visibility = View.VISIBLE
         projectionStatus.text = getString(R.string.projection_connecting)
         usbLogStatusText.text = getString(R.string.launcher_footer)
-        hideSystemUi()
+        reclaimSystemUi()
     }
 
     private fun handleProjectionUsbState(state: String?, error: String?) {
@@ -1275,22 +1282,57 @@ class MainActivity : AppCompatActivity() {
             error == "USB write error"
     }
 
-    private fun hideSystemUi() {
+    private fun configureFullscreenWindow() {
+        window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(false)
+        }
+        @Suppress("DEPRECATION")
+        window.decorView.setOnSystemUiVisibilityChangeListener {
+            if (hasWindowFocus()) {
+                reclaimSystemUi()
+            }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.decorView.setOnApplyWindowInsetsListener { view, insets ->
+                if (hasWindowFocus()) {
+                    view.post { reclaimSystemUi() }
+                }
+                insets
+            }
+        }
+    }
+
+    private fun reclaimSystemUi() {
+        val now = SystemClock.uptimeMillis()
+        if (now - lastSystemUiReclaimMs < 50L) {
+            return
+        }
+        lastSystemUiReclaimMs = now
+        hideSystemUi()
+        systemUiHandler.removeCallbacks(delayedSystemUiHide)
+        systemUiHandler.postDelayed(delayedSystemUiHide, 100L)
+        systemUiHandler.postDelayed(delayedSystemUiHide, 500L)
+        systemUiHandler.postDelayed(delayedSystemUiHide, 1_500L)
+    }
+
+    private fun hideSystemUi() {
+        window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+        @Suppress("DEPRECATION")
+        window.decorView.systemUiVisibility =
+            View.SYSTEM_UI_FLAG_FULLSCREEN or
+                View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(false)
             window.insetsController?.let { controller ->
                 controller.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
                 controller.systemBarsBehavior =
                     WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             }
-        } else {
-            @Suppress("DEPRECATION")
-            window.decorView.systemUiVisibility =
-                View.SYSTEM_UI_FLAG_FULLSCREEN or
-                    View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
-                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
-                    View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
-                    View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
-                    View.SYSTEM_UI_FLAG_LAYOUT_STABLE
         }
     }
 

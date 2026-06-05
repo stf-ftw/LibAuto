@@ -2,8 +2,8 @@
 
 Current release build:
 
-- Version name: `0.6`
-- Version code: `6`
+- Version name: `0.7`
+- Version code: `7`
 - Application id: `ro.stf_ftw.libauto`
 - Minimum SDK: 26
 - ABIs: `armeabi-v7a`, `arm64-v8a`
@@ -51,11 +51,11 @@ Download `LibAuto-standard.apk` first.
 
 If it does not install or crashes immediately on an older/Chinese Android head unit, try `LibAuto-legacy-headunit.apk` instead.
 
-## Changes Since v0.5
+## Changes Since v0.6
 
-- Added a projection frame-rate selector with `30 fps` and `60 fps` options.
-- Kept `60 fps` as the default because it improved projection cadence in testing.
-- Continued touch/video pipeline tuning after v0.5; touch forwarding is functional, but drag and pinch-to-zoom can still feel sluggish or choppy on some devices.
+- Fixed the drag and pinch-to-zoom smoothness regression by keeping media delivery off the AA protocol path and avoiding USB status work on packet hot paths.
+- Fixed a session-freeze/exit bug caused by concurrent USB device status snapshots during active projection.
+- Fixed fullscreen recovery after external overlays such as a reverse camera: LibAuto now reclaims immersive mode when focus returns.
 - Media control key support is still experimental and may not work on every head unit.
 - Wireless Android Auto remains in progress and is not exposed as a normal launcher flow yet.
 - I am currently in an exam session, so development updates may be slower over the next four weeks.
