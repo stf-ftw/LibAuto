@@ -488,6 +488,7 @@ class UsbIoController(
             }
             read
         } catch (ex: Exception) {
+            LogFileHelper.appendException(context, "USB read exception", ex)
             logger(
                 "USB read exception ${ex.javaClass.simpleName}: ${ex.message}\n" +
                     ex.stackTraceToString()
@@ -516,6 +517,7 @@ class UsbIoController(
         val result = try {
             conn.bulkTransfer(outEp, buffer, writeLen, timeoutMs)
         } catch (ex: Exception) {
+            LogFileHelper.appendException(context, "USB write exception", ex)
             logger(
                 "USB write exception ${ex.javaClass.simpleName}: ${ex.message}\n" +
                     ex.stackTraceToString()
@@ -629,6 +631,11 @@ class UsbIoController(
 
     fun onTransportStalled() {
         mainHandler.removeCallbacks(delayedAaStart)
+        LogFileHelper.appendEvent(
+            context,
+            "UsbIoController",
+            "USB transport stalled; keeping accessory open state=$state selected=${selectedDevice?.deviceName ?: "none"}"
+        )
         logger(
             "USB transport stalled during AA; keeping accessory open " +
                 "state=$state selected=${selectedDevice?.deviceName ?: "none"}"

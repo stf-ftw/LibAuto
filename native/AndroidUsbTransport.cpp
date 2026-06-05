@@ -151,6 +151,7 @@ void AndroidUsbTransport::readLoop() {
                 continue;
             }
             native_log::Logf(kLogTag, "E", "AA USB read error code=%d", result);
+            usb_.NotifyTransportStalled();
             boost::asio::post(receiveStrand_, [this, self = shared_from_this(), result]() {
                 rejectReceivePromises(f1x::aasdk::error::Error(
                     f1x::aasdk::error::ErrorCode::USB_TRANSFER,
@@ -239,6 +240,7 @@ void AndroidUsbTransport::sendLoop() {
             }
 
             native_log::Logf(kLogTag, "E", "AA USB write error code=%d", result);
+            usb_.NotifyTransportStalled();
             boost::asio::post(sendStrand_, [this, self = shared_from_this(), queueElement, result]() {
                 queueElement->second->reject(f1x::aasdk::error::Error(
                     f1x::aasdk::error::ErrorCode::USB_TRANSFER,
