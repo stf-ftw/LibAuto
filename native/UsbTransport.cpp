@@ -3,6 +3,7 @@
 #include <android/log.h>
 #include <jni.h>
 #include <mutex>
+#include <shared_mutex>
 
 #include "NativeLog.h"
 
@@ -16,7 +17,8 @@ jmethodID g_open_name = nullptr;
 jmethodID g_read = nullptr;
 jmethodID g_write = nullptr;
 jmethodID g_close = nullptr;
-std::mutex g_jni_mutex;
+std::mutex g_bridge_mutex;
+std::shared_mutex g_connection_mutex;
 
 struct EnvHolder {
     JNIEnv* env;
@@ -66,16 +68,22 @@ bool InitUsbJniBridge(void* env_ptr) {
         __android_log_print(ANDROID_LOG_ERROR, USB_LOG_TAG, "Failed to get JavaVM");
         return false;
     }
-    std::lock_guard<std::mutex> lock(g_jni_mutex);
+    std::lock_guard<std::mutex> lock(g_bridge_mutex);
     return ensure_bridge(env);
 }
 
 bool UsbTransport::OpenByVidPid(int vid, int pid) {
-    std::lock_guard<std::mutex> lock(g_jni_mutex);
+    std::unique_lock<std::shared_mutex> connection_lock(g_connection_mutex);
     auto holder = get_env();
     JNIEnv* env = holder.env;
-    if (env == nullptr || !ensure_bridge(env)) {
+    if (env == nullptr) {
         return false;
+    }
+    {
+        std::lock_guard<std::mutex> bridge_lock(g_bridge_mutex);
+        if (!ensure_bridge(env)) {
+            return false;
+        }
     }
     jboolean ok = env->CallStaticBooleanMethod(g_bridge_class, g_open_vid_pid, vid, pid);
     native_log::Logf(USB_LOG_TAG, "I", "usbOpen vid=%d pid=%d => %d", vid, pid, ok);
@@ -87,11 +95,17 @@ bool UsbTransport::OpenByVidPid(int vid, int pid) {
 }
 
 bool UsbTransport::OpenByDeviceName(const std::string& device_name) {
-    std::lock_guard<std::mutex> lock(g_jni_mutex);
+    std::unique_lock<std::shared_mutex> connection_lock(g_connection_mutex);
     auto holder = get_env();
     JNIEnv* env = holder.env;
-    if (env == nullptr || !ensure_bridge(env)) {
+    if (env == nullptr) {
         return false;
+    }
+    {
+        std::lock_guard<std::mutex> bridge_lock(g_bridge_mutex);
+        if (!ensure_bridge(env)) {
+            return false;
+        }
     }
     jstring name = env->NewStringUTF(device_name.c_str());
     jboolean ok = env->CallStaticBooleanMethod(g_bridge_class, g_open_name, name);
@@ -105,11 +119,17 @@ bool UsbTransport::OpenByDeviceName(const std::string& device_name) {
 }
 
 int UsbTransport::Read(uint8_t* buffer, int length, int timeout_ms) {
-    std::lock_guard<std::mutex> lock(g_jni_mutex);
+    std::shared_lock<std::shared_mutex> connection_lock(g_connection_mutex);
     auto holder = get_env();
     JNIEnv* env = holder.env;
-    if (env == nullptr || !ensure_bridge(env)) {
+    if (env == nullptr) {
         return -1;
+    }
+    {
+        std::lock_guard<std::mutex> bridge_lock(g_bridge_mutex);
+        if (!ensure_bridge(env)) {
+            return -1;
+        }
     }
     jbyteArray arr = env->NewByteArray(length);
     jint result = env->CallStaticIntMethod(g_bridge_class, g_read, arr, timeout_ms);
@@ -129,11 +149,17 @@ int UsbTransport::Read(uint8_t* buffer, int length, int timeout_ms) {
 }
 
 int UsbTransport::Write(const uint8_t* buffer, int length, int timeout_ms) {
-    std::lock_guard<std::mutex> lock(g_jni_mutex);
+    std::shared_lock<std::shared_mutex> connection_lock(g_connection_mutex);
     auto holder = get_env();
     JNIEnv* env = holder.env;
-    if (env == nullptr || !ensure_bridge(env)) {
+    if (env == nullptr) {
         return -1;
+    }
+    {
+        std::lock_guard<std::mutex> bridge_lock(g_bridge_mutex);
+        if (!ensure_bridge(env)) {
+            return -1;
+        }
     }
     jbyteArray arr = env->NewByteArray(length);
     env->SetByteArrayRegion(arr, 0, length, reinterpret_cast<const jbyte*>(buffer));
@@ -151,11 +177,17 @@ int UsbTransport::Write(const uint8_t* buffer, int length, int timeout_ms) {
 }
 
 void UsbTransport::Close() {
-    std::lock_guard<std::mutex> lock(g_jni_mutex);
+    std::unique_lock<std::shared_mutex> connection_lock(g_connection_mutex);
     auto holder = get_env();
     JNIEnv* env = holder.env;
-    if (env == nullptr || !ensure_bridge(env)) {
+    if (env == nullptr) {
         return;
+    }
+    {
+        std::lock_guard<std::mutex> bridge_lock(g_bridge_mutex);
+        if (!ensure_bridge(env)) {
+            return;
+        }
     }
     env->CallStaticVoidMethod(g_bridge_class, g_close);
     native_log::LogJniException(env, "usbClose");
