@@ -110,6 +110,7 @@ constexpr int kAudioSinkSystem = 2;
 constexpr int kAudioBitDepth = 16;
 constexpr size_t kMaxJavaVideoQueueFrames = 8;
 constexpr size_t kMaxJavaAudioQueueFrames = 96;
+constexpr size_t kAaIoWorkerCount = 4;
 constexpr uint32_t kMaxUnacked = 1;
 constexpr uint32_t kMediaAudioMaxUnacked = 4;
 // Keep the AASDK strand clear for audio/video/control, but allow a short burst of
@@ -894,7 +895,7 @@ struct AaSession {
     boost::asio::io_service::strand strand;
     using WorkGuard = boost::asio::executor_work_guard<boost::asio::io_service::executor_type>;
     std::unique_ptr<WorkGuard> work_guard;
-    std::thread io_thread;
+    std::vector<std::thread> io_threads;
     std::shared_ptr<transport::Transport> transport;
     std::shared_ptr<tcp::TCPWrapper> tcp_wrapper;
     tcp::ITCPEndpoint::SocketPointer tcp_socket;
@@ -2453,10 +2454,15 @@ bool startAaSessionWithTransport(
     session->sensor->receive(session->sensor_handler);
     session->bluetooth->receive(session->bluetooth_handler);
     session->control->receive(session->control_handler);
-    session->io_thread = std::thread([session]() {
-        boostCurrentThreadPriority("AA io");
-        session->io.run();
-    });
+    session->io_threads.reserve(kAaIoWorkerCount);
+    for (size_t worker = 0; worker < kAaIoWorkerCount; ++worker) {
+        session->io_threads.emplace_back([session, worker]() {
+            boostCurrentThreadPriority("AA io");
+            native_log::Logf(LOG_TAG, "I", "AA io worker start index=%zu", worker);
+            session->io.run();
+            native_log::Logf(LOG_TAG, "I", "AA io worker stop index=%zu", worker);
+        });
+    }
 
     auto promise = channel::SendPromise::defer(session->strand);
     promise->then(
@@ -2612,8 +2618,10 @@ void stopAaSession() {
     session->transport->stop();
     session->io.stop();
     session->work_guard.reset();
-    if (session->io_thread.joinable()) {
-        session->io_thread.join();
+    for (auto& thread : session->io_threads) {
+        if (thread.joinable()) {
+            thread.join();
+        }
     }
 }
 }  // namespace
