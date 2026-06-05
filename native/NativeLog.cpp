@@ -99,16 +99,17 @@ void Logf(const char* tag, const char* level, const char* fmt, ...) {
     Log(tag, level, buffer);
 }
 
-void LogJniException(JNIEnv* env, const char* context) {
+bool LogJniException(JNIEnv* env, const char* context) {
     if (env == nullptr) {
-        return;
+        return false;
     }
     if (env->ExceptionCheck() == JNI_FALSE) {
-        return;
+        return false;
     }
     env->ExceptionDescribe();
     env->ExceptionClear();
     Logf("NativeLog", "E", "JNI exception cleared: %s", context);
+    return true;
 }
 
 }

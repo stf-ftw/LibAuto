@@ -20,7 +20,8 @@ class UsbIoController(
     private val logger: (String) -> Unit,
     private val statusListener: (UsbStatusSnapshot) -> Unit,
     private val aaReadyListener: (() -> Unit)? = null,
-    private val sessionClosedListener: (() -> Unit)? = null
+    private val sessionClosedListener: (() -> Unit)? = null,
+    private val sessionStalledListener: (() -> Unit)? = null
 ) {
     private enum class UsbState {
         IDLE,
@@ -486,6 +487,14 @@ class UsbIoController(
                 refreshStatus()
             }
             read
+        } catch (ex: Exception) {
+            logger(
+                "USB read exception ${ex.javaClass.simpleName}: ${ex.message}\n" +
+                    ex.stackTraceToString()
+            )
+            lastError = "USB read exception"
+            refreshStatus()
+            -99
         } finally {
             externalReadActive.set(false)
         }
@@ -616,6 +625,31 @@ class UsbIoController(
             }
         }
         refreshStatus()
+    }
+
+    fun onTransportStalled() {
+        mainHandler.removeCallbacks(delayedAaStart)
+        logger(
+            "USB transport stalled during AA; keeping accessory open " +
+                "state=$state selected=${selectedDevice?.deviceName ?: "none"}"
+        )
+        stopReadLoop()
+        readEnabled = false
+        writeTimeoutCount = 0
+        aaStartRequested = false
+        aaStarted = false
+        firstReadLogged = false
+        firstWriteLogged = false
+        lastError = "AA transport stalled"
+        if (isReadyForIo()) {
+            setState(UsbState.READY_FOR_AA)
+        } else {
+            setState(UsbState.DISCONNECTED)
+        }
+        refreshStatus()
+        mainHandler.post {
+            sessionStalledListener?.invoke()
+        }
     }
 
     fun getDeviceSummary(): String {

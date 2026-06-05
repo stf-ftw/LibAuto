@@ -136,9 +136,9 @@ void AndroidUsbTransport::readLoop() {
                     now - firstTimeoutAt).count();
                 if (idleMs >= kIdleDisconnectMs) {
                     native_log::Logf(kLogTag, "W",
-                                     "AA USB idle for %lldms; dropping connection",
+                                     "AA USB idle for %lldms; ending stalled AA transport",
                                      static_cast<long long>(idleMs));
-                    usb_.Close();
+                    usb_.NotifyTransportStalled();
                     boost::asio::post(receiveStrand_, [this, self = shared_from_this(), result]() {
                         rejectReceivePromises(f1x::aasdk::error::Error(
                             f1x::aasdk::error::ErrorCode::USB_TRANSFER,

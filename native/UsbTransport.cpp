@@ -17,6 +17,7 @@ jmethodID g_open_name = nullptr;
 jmethodID g_read = nullptr;
 jmethodID g_write = nullptr;
 jmethodID g_close = nullptr;
+jmethodID g_transport_stalled = nullptr;
 std::mutex g_bridge_mutex;
 std::shared_mutex g_connection_mutex;
 
@@ -55,7 +56,9 @@ bool ensure_bridge(JNIEnv* env) {
     g_read = env->GetStaticMethodID(g_bridge_class, "usbRead", "([BI)I");
     g_write = env->GetStaticMethodID(g_bridge_class, "usbWrite", "([BII)I");
     g_close = env->GetStaticMethodID(g_bridge_class, "usbClose", "()V");
-    return g_open_vid_pid && g_open_name && g_read && g_write && g_close;
+    g_transport_stalled = env->GetStaticMethodID(g_bridge_class, "usbTransportStalled", "()V");
+    return g_open_vid_pid && g_open_name && g_read && g_write && g_close &&
+        g_transport_stalled;
 }
 }
 
@@ -133,8 +136,9 @@ int UsbTransport::Read(uint8_t* buffer, int length, int timeout_ms) {
     }
     jbyteArray arr = env->NewByteArray(length);
     jint result = env->CallStaticIntMethod(g_bridge_class, g_read, arr, timeout_ms);
-    native_log::LogJniException(env, "usbRead");
-    if (result > 0) {
+    if (native_log::LogJniException(env, "usbRead")) {
+        result = -99;
+    } else if (result > 0) {
         env->GetByteArrayRegion(arr, 0, result, reinterpret_cast<jbyte*>(buffer));
     }
     env->DeleteLocalRef(arr);
@@ -165,7 +169,9 @@ int UsbTransport::Write(const uint8_t* buffer, int length, int timeout_ms) {
     env->SetByteArrayRegion(arr, 0, length, reinterpret_cast<const jbyte*>(buffer));
     jint result = env->CallStaticIntMethod(g_bridge_class, g_write, arr, length, timeout_ms);
     env->DeleteLocalRef(arr);
-    native_log::LogJniException(env, "usbWrite");
+    if (native_log::LogJniException(env, "usbWrite")) {
+        result = -99;
+    }
     if (!first_write_logged_) {
         first_write_logged_ = true;
         native_log::Logf(USB_LOG_TAG, "I", "First OUT write len=%d result=%d", length, result);
@@ -192,6 +198,27 @@ void UsbTransport::Close() {
     env->CallStaticVoidMethod(g_bridge_class, g_close);
     native_log::LogJniException(env, "usbClose");
     native_log::Log(USB_LOG_TAG, "I", "usbClose");
+    if (holder.attached) {
+        g_vm->DetachCurrentThread();
+    }
+}
+
+void UsbTransport::NotifyTransportStalled() {
+    std::shared_lock<std::shared_mutex> connection_lock(g_connection_mutex);
+    auto holder = get_env();
+    JNIEnv* env = holder.env;
+    if (env == nullptr) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> bridge_lock(g_bridge_mutex);
+        if (!ensure_bridge(env)) {
+            return;
+        }
+    }
+    env->CallStaticVoidMethod(g_bridge_class, g_transport_stalled);
+    native_log::LogJniException(env, "usbTransportStalled");
+    native_log::Log(USB_LOG_TAG, "I", "usbTransportStalled");
     if (holder.attached) {
         g_vm->DetachCurrentThread();
     }

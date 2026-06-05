@@ -10,6 +10,7 @@ public:
     int Read(uint8_t* buffer, int length, int timeout_ms);
     int Write(const uint8_t* buffer, int length, int timeout_ms);
     void Close();
+    void NotifyTransportStalled();
 
 private:
     bool first_read_logged_ = false;

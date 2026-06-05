@@ -36,4 +36,9 @@ object UsbJniBridge {
     fun usbClose() {
         controller?.close()
     }
+
+    @JvmStatic
+    fun usbTransportStalled() {
+        controller?.onTransportStalled()
+    }
 }

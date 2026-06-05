@@ -118,6 +118,17 @@ class ProjectionService : Service() {
                     appendUsbLog("AASDK session reset after USB close")
                 }
                 stopAaSessionAsync("usb-close")
+            },
+            sessionStalledListener = {
+                mainHandler.post {
+                    synchronized(this@ProjectionService) {
+                        aaStarted = false
+                        aaStartInProgress = false
+                    }
+                    CarSensorBridge.stop()
+                    appendUsbLog("AASDK session reset after USB transport stall")
+                }
+                stopAaSessionAsync("usb-stall")
             }
         )
         wirelessController = WirelessAaController(this) { message ->
