@@ -4,10 +4,12 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cmath>
 #include <csignal>
 #include <cstring>
 #include <dlfcn.h>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -106,6 +108,8 @@ constexpr int kAudioSinkMedia = 0;
 constexpr int kAudioSinkSpeech = 1;
 constexpr int kAudioSinkSystem = 2;
 constexpr int kAudioBitDepth = 16;
+constexpr size_t kMaxJavaVideoQueueFrames = 8;
+constexpr size_t kMaxJavaAudioQueueFrames = 96;
 constexpr uint32_t kMaxUnacked = 1;
 constexpr uint32_t kMediaAudioMaxUnacked = 4;
 // Keep the AASDK strand clear for audio/video/control, but allow a short burst of
@@ -113,6 +117,9 @@ constexpr uint32_t kMediaAudioMaxUnacked = 4;
 constexpr int32_t kMaxTouchInFlight = 4;
 constexpr int32_t kMaxTouchHardLimit = 10;
 constexpr int64_t kMaxPendingTouchMoveAgeMs = 70;
+
+void boostCurrentThreadPriority(const char* label, int nice_value);
+
 constexpr std::array<uint32_t, 19> kSupportedButtonCodes = {
     static_cast<uint32_t>(proto::enums::ButtonCode::MENU),
     static_cast<uint32_t>(proto::enums::ButtonCode::HOME),
@@ -280,6 +287,26 @@ struct EnvHolder {
     bool attached;
 };
 
+struct JavaMediaFrame {
+    int sink_id = -1;
+    int64_t pts_us = 0;
+    std::vector<uint8_t> data;
+};
+
+std::mutex g_video_delivery_mutex;
+std::condition_variable g_video_delivery_cv;
+std::deque<JavaMediaFrame> g_video_delivery_queue;
+std::thread g_video_delivery_thread;
+std::mutex g_audio_delivery_mutex;
+std::condition_variable g_audio_delivery_cv;
+std::deque<JavaMediaFrame> g_audio_delivery_queue;
+std::thread g_audio_delivery_thread;
+std::atomic<bool> g_java_delivery_running{false};
+std::atomic<uint64_t> g_video_delivery_enqueued{0};
+std::atomic<uint64_t> g_video_delivery_dropped{0};
+std::atomic<uint64_t> g_audio_delivery_enqueued{0};
+std::atomic<uint64_t> g_audio_delivery_dropped{0};
+
 EnvHolder getEnv() {
     if (g_vm == nullptr) {
         return {nullptr, false};
@@ -363,6 +390,236 @@ bool warmJvmBindings(JNIEnv* env) {
     return ensureProjectionSink(env) && ensureMicInputBridge(env) && ensureBluetoothBridge(env);
 }
 
+bool pushByteArrayToProjectionSink(
+    JNIEnv* env,
+    jmethodID method,
+    const JavaMediaFrame& frame,
+    bool audio) {
+    if (env == nullptr || method == nullptr || frame.data.empty()) {
+        return false;
+    }
+    jbyteArray arr = env->NewByteArray(static_cast<jsize>(frame.data.size()));
+    if (arr == nullptr) {
+        native_log::Log(LOG_TAG, "E", audio ? "AA audio delivery NewByteArray failed" : "AA video delivery NewByteArray failed");
+        native_log::LogJniException(env, audio ? "nativePushAudio NewByteArray" : "nativePushVideo NewByteArray");
+        return false;
+    }
+    env->SetByteArrayRegion(
+        arr,
+        0,
+        static_cast<jsize>(frame.data.size()),
+        reinterpret_cast<const jbyte*>(frame.data.data())
+    );
+    if (audio) {
+        env->CallStaticVoidMethod(
+            g_projection_sink_class,
+            method,
+            frame.sink_id,
+            arr,
+            static_cast<jlong>(frame.pts_us)
+        );
+    } else {
+        env->CallStaticVoidMethod(
+            g_projection_sink_class,
+            method,
+            arr,
+            static_cast<jlong>(frame.pts_us)
+        );
+    }
+    env->DeleteLocalRef(arr);
+    native_log::LogJniException(env, audio ? "nativePushAudio" : "nativePushVideo");
+    return true;
+}
+
+void runVideoDeliveryWorker() {
+    boostCurrentThreadPriority("AA video delivery", -12);
+    auto holder = getEnv();
+    if (holder.env == nullptr) {
+        native_log::Log(LOG_TAG, "E", "AA video delivery env unavailable");
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_jni_mutex);
+        if (!ensureProjectionSink(holder.env)) {
+            if (holder.attached) {
+                g_vm->DetachCurrentThread();
+            }
+            return;
+        }
+    }
+    while (g_java_delivery_running.load()) {
+        JavaMediaFrame frame;
+        {
+            std::unique_lock<std::mutex> lock(g_video_delivery_mutex);
+            g_video_delivery_cv.wait(lock, [] {
+                return !g_java_delivery_running.load() || !g_video_delivery_queue.empty();
+            });
+            if (!g_java_delivery_running.load() && g_video_delivery_queue.empty()) {
+                break;
+            }
+            frame = std::move(g_video_delivery_queue.front());
+            g_video_delivery_queue.pop_front();
+        }
+        pushByteArrayToProjectionSink(holder.env, g_push_video, frame, false);
+    }
+    if (holder.attached) {
+        g_vm->DetachCurrentThread();
+    }
+}
+
+void runAudioDeliveryWorker() {
+    boostCurrentThreadPriority("AA audio delivery", -12);
+    auto holder = getEnv();
+    if (holder.env == nullptr) {
+        native_log::Log(LOG_TAG, "E", "AA audio delivery env unavailable");
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_jni_mutex);
+        if (!ensureProjectionSink(holder.env)) {
+            if (holder.attached) {
+                g_vm->DetachCurrentThread();
+            }
+            return;
+        }
+    }
+    while (g_java_delivery_running.load()) {
+        JavaMediaFrame frame;
+        {
+            std::unique_lock<std::mutex> lock(g_audio_delivery_mutex);
+            g_audio_delivery_cv.wait(lock, [] {
+                return !g_java_delivery_running.load() || !g_audio_delivery_queue.empty();
+            });
+            if (!g_java_delivery_running.load() && g_audio_delivery_queue.empty()) {
+                break;
+            }
+            frame = std::move(g_audio_delivery_queue.front());
+            g_audio_delivery_queue.pop_front();
+        }
+        pushByteArrayToProjectionSink(holder.env, g_push_audio, frame, true);
+    }
+    if (holder.attached) {
+        g_vm->DetachCurrentThread();
+    }
+}
+
+void startJavaDeliveryWorkers() {
+    bool expected = false;
+    if (!g_java_delivery_running.compare_exchange_strong(expected, true)) {
+        return;
+    }
+    g_video_delivery_enqueued.store(0);
+    g_video_delivery_dropped.store(0);
+    g_audio_delivery_enqueued.store(0);
+    g_audio_delivery_dropped.store(0);
+    {
+        std::lock_guard<std::mutex> lock(g_video_delivery_mutex);
+        g_video_delivery_queue.clear();
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_audio_delivery_mutex);
+        g_audio_delivery_queue.clear();
+    }
+    g_video_delivery_thread = std::thread(runVideoDeliveryWorker);
+    g_audio_delivery_thread = std::thread(runAudioDeliveryWorker);
+}
+
+void stopJavaDeliveryWorkers() {
+    if (!g_java_delivery_running.exchange(false)) {
+        return;
+    }
+    g_video_delivery_cv.notify_all();
+    g_audio_delivery_cv.notify_all();
+    if (g_video_delivery_thread.joinable()) {
+        g_video_delivery_thread.join();
+    }
+    if (g_audio_delivery_thread.joinable()) {
+        g_audio_delivery_thread.join();
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_video_delivery_mutex);
+        g_video_delivery_queue.clear();
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_audio_delivery_mutex);
+        g_audio_delivery_queue.clear();
+    }
+}
+
+void enqueueVideoForJava(const common::DataConstBuffer& payload, int64_t pts_us, uint64_t count) {
+    if (!g_java_delivery_running.load()) {
+        return;
+    }
+    JavaMediaFrame frame;
+    frame.pts_us = pts_us;
+    frame.data.assign(payload.cdata, payload.cdata + payload.size);
+    size_t depth = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_video_delivery_mutex);
+        if (g_video_delivery_queue.size() >= kMaxJavaVideoQueueFrames) {
+            g_video_delivery_queue.pop_front();
+            const auto dropped = g_video_delivery_dropped.fetch_add(1) + 1;
+            if (dropped <= 8 || dropped % 100 == 0) {
+                native_log::Logf(LOG_TAG,
+                                 "W",
+                                 "AA video delivery drop dropped=%llu queueLimit=%zu",
+                                 static_cast<unsigned long long>(dropped),
+                                 kMaxJavaVideoQueueFrames);
+            }
+        }
+        g_video_delivery_queue.push_back(std::move(frame));
+        depth = g_video_delivery_queue.size();
+    }
+    g_video_delivery_cv.notify_one();
+    const auto enqueued = g_video_delivery_enqueued.fetch_add(1) + 1;
+    if (count % 600 == 0) {
+        native_log::Logf(LOG_TAG,
+                         "I",
+                         "AA video frame queued count=%llu deliveryQueued=%llu queueDepth=%zu dropped=%llu",
+                         static_cast<unsigned long long>(count),
+                         static_cast<unsigned long long>(enqueued),
+                         depth,
+                         static_cast<unsigned long long>(g_video_delivery_dropped.load()));
+    }
+}
+
+void enqueueAudioForJava(int sink_id, const common::DataConstBuffer& payload, int64_t pts_us) {
+    if (!g_java_delivery_running.load() || payload.cdata == nullptr || payload.size == 0) {
+        return;
+    }
+    JavaMediaFrame frame;
+    frame.sink_id = sink_id;
+    frame.pts_us = pts_us;
+    frame.data.assign(payload.cdata, payload.cdata + payload.size);
+    size_t depth = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_audio_delivery_mutex);
+        if (g_audio_delivery_queue.size() >= kMaxJavaAudioQueueFrames) {
+            g_audio_delivery_queue.pop_front();
+            const auto dropped = g_audio_delivery_dropped.fetch_add(1) + 1;
+            if (dropped <= 8 || dropped % 100 == 0) {
+                native_log::Logf(LOG_TAG,
+                                 "W",
+                                 "AA audio delivery drop dropped=%llu queueLimit=%zu",
+                                 static_cast<unsigned long long>(dropped),
+                                 kMaxJavaAudioQueueFrames);
+            }
+        }
+        g_audio_delivery_queue.push_back(std::move(frame));
+        depth = g_audio_delivery_queue.size();
+    }
+    g_audio_delivery_cv.notify_one();
+    const auto enqueued = g_audio_delivery_enqueued.fetch_add(1) + 1;
+    if (enqueued % 600 == 0) {
+        native_log::Logf(LOG_TAG,
+                         "I",
+                         "AA audio delivery queued=%llu queueDepth=%zu dropped=%llu",
+                         static_cast<unsigned long long>(enqueued),
+                         depth,
+                         static_cast<unsigned long long>(g_audio_delivery_dropped.load()));
+    }
+}
+
 void configureVideoSink(int width, int height) {
     std::lock_guard<std::mutex> lock(g_jni_mutex);
     auto holder = getEnv();
@@ -405,36 +662,7 @@ void pushVideoFrame(const common::DataConstBuffer& payload, int64_t pts_us) {
                          static_cast<long long>(pts_us),
                          static_cast<unsigned long long>(count));
     }
-    auto holder = getEnv();
-    if (holder.env == nullptr || !ensureProjectionSink(holder.env)) {
-        return;
-    }
-    jbyteArray arr = holder.env->NewByteArray(static_cast<jsize>(payload.size));
-    if (arr == nullptr) {
-        native_log::Log(LOG_TAG, "E", "AA video frame NewByteArray failed");
-        native_log::LogJniException(holder.env, "nativePushVideo NewByteArray");
-        if (holder.attached) {
-            g_vm->DetachCurrentThread();
-        }
-        return;
-    }
-    holder.env->SetByteArrayRegion(
-        arr,
-        0,
-        static_cast<jsize>(payload.size),
-        reinterpret_cast<const jbyte*>(payload.cdata)
-    );
-    holder.env->CallStaticVoidMethod(g_projection_sink_class, g_push_video, arr, static_cast<jlong>(pts_us));
-    holder.env->DeleteLocalRef(arr);
-    native_log::LogJniException(holder.env, "nativePushVideo");
-    if (count % 600 == 0) {
-        native_log::Logf(LOG_TAG, "I",
-                         "AA video frame delivered count=%llu",
-                         static_cast<unsigned long long>(count));
-    }
-    if (holder.attached) {
-        g_vm->DetachCurrentThread();
-    }
+    enqueueVideoForJava(payload, pts_us, count);
 }
 
 void configureAudioSink(int sink_id, int sample_rate, int channel_count) {
@@ -549,23 +777,7 @@ bool isPhoneBluetoothPaired(const std::string& phone_address) {
 }
 
 void pushAudioFrame(int sink_id, const common::DataConstBuffer& payload, int64_t pts_us) {
-    auto holder = getEnv();
-    if (holder.env == nullptr || !ensureProjectionSink(holder.env)) {
-        return;
-    }
-    jbyteArray arr = holder.env->NewByteArray(static_cast<jsize>(payload.size));
-    holder.env->SetByteArrayRegion(
-        arr,
-        0,
-        static_cast<jsize>(payload.size),
-        reinterpret_cast<const jbyte*>(payload.cdata)
-    );
-    holder.env->CallStaticVoidMethod(g_projection_sink_class, g_push_audio, sink_id, arr, static_cast<jlong>(pts_us));
-    holder.env->DeleteLocalRef(arr);
-    native_log::LogJniException(holder.env, "nativePushAudio");
-    if (holder.attached) {
-        g_vm->DetachCurrentThread();
-    }
+    enqueueAudioForJava(sink_id, payload, pts_us);
 }
 
 std::string hexDump(const uint8_t* data, size_t length) {
@@ -2175,6 +2387,7 @@ bool startAaSessionWithTransport(
     g_touch_drop_count.store(0);
     g_touch_coalesce_count.store(0);
     resetTouchPipeline();
+    startJavaDeliveryWorkers();
     g_button_event_count.store(0);
     session->transport = std::move(transport);
     session->ssl_wrapper = std::make_shared<transport::SSLWrapper>();
@@ -2390,6 +2603,7 @@ void stopAaSession() {
     g_touch_drop_count.store(0);
     g_touch_coalesce_count.store(0);
     resetTouchPipeline();
+    stopJavaDeliveryWorkers();
     stopVideoSink();
     stopAudioSink(kAudioSinkMedia);
     stopAudioSink(kAudioSinkSpeech);
