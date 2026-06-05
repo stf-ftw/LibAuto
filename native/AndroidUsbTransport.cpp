@@ -151,7 +151,9 @@ void AndroidUsbTransport::readLoop() {
                 continue;
             }
             native_log::Logf(kLogTag, "E", "AA USB read error code=%d", result);
+            native_log::Log(kLogTag, "W", "AA USB read fatal; notifying Java transport stall");
             usb_.NotifyTransportStalled();
+            native_log::Log(kLogTag, "W", "AA USB read fatal; Java transport stall notified");
             boost::asio::post(receiveStrand_, [this, self = shared_from_this(), result]() {
                 rejectReceivePromises(f1x::aasdk::error::Error(
                     f1x::aasdk::error::ErrorCode::USB_TRANSFER,
@@ -240,7 +242,9 @@ void AndroidUsbTransport::sendLoop() {
             }
 
             native_log::Logf(kLogTag, "E", "AA USB write error code=%d", result);
+            native_log::Log(kLogTag, "W", "AA USB write fatal; notifying Java transport stall");
             usb_.NotifyTransportStalled();
+            native_log::Log(kLogTag, "W", "AA USB write fatal; Java transport stall notified");
             boost::asio::post(sendStrand_, [this, self = shared_from_this(), queueElement, result]() {
                 queueElement->second->reject(f1x::aasdk::error::Error(
                     f1x::aasdk::error::ErrorCode::USB_TRANSFER,

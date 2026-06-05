@@ -154,6 +154,8 @@ jmethodID g_push_video = nullptr;
 jmethodID g_configure_audio = nullptr;
 jmethodID g_stop_audio = nullptr;
 jmethodID g_push_audio = nullptr;
+jclass g_usb_bridge_class = nullptr;
+jmethodID g_usb_transport_stalled = nullptr;
 jclass g_mic_bridge_class = nullptr;
 jmethodID g_start_mic = nullptr;
 jmethodID g_stop_mic = nullptr;
@@ -188,6 +190,9 @@ std::atomic<int32_t> g_video_resolution{
 };
 std::atomic<int32_t> g_video_fps{60};
 std::atomic<int32_t> g_touch_in_flight{0};
+std::atomic<bool> g_transport_stall_notified{false};
+
+constexpr uint32_t kUsbBridgeFatalError = static_cast<uint32_t>(-99);
 
 // Modern Android Auto protocol definitions use _60=1 and _30=2. The vendored
 // AASDK v2 proto labels those numeric values in the opposite order, so choose
@@ -346,6 +351,58 @@ bool ensureProjectionSink(JNIEnv* env) {
            g_push_audio != nullptr;
 }
 
+bool ensureUsbJniBridge(JNIEnv* env) {
+    if (g_usb_bridge_class != nullptr) {
+        return true;
+    }
+    jclass local = env->FindClass("com/example/androidautodisplay/UsbJniBridge");
+    if (local == nullptr) {
+        native_log::Log(LOG_TAG, "E", "UsbJniBridge class not found");
+        return false;
+    }
+    g_usb_bridge_class = reinterpret_cast<jclass>(env->NewGlobalRef(local));
+    env->DeleteLocalRef(local);
+    g_usb_transport_stalled = env->GetStaticMethodID(
+        g_usb_bridge_class,
+        "usbTransportStalled",
+        "()V"
+    );
+    return g_usb_transport_stalled != nullptr;
+}
+
+void notifyJavaTransportStalled(const char* reason) {
+    if (g_transport_stall_notified.exchange(true)) {
+        return;
+    }
+    native_log::Logf(LOG_TAG, "W", "AA transport stalled notify reason=%s", reason);
+    auto holder = getEnv();
+    if (holder.env == nullptr) {
+        native_log::Log(LOG_TAG, "E", "AA transport stalled notify failed: no JNI env");
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_jni_mutex);
+        if (!ensureUsbJniBridge(holder.env)) {
+            if (holder.attached) {
+                g_vm->DetachCurrentThread();
+            }
+            return;
+        }
+    }
+    holder.env->CallStaticVoidMethod(g_usb_bridge_class, g_usb_transport_stalled);
+    native_log::LogJniException(holder.env, "UsbJniBridge.usbTransportStalled");
+    native_log::Log(LOG_TAG, "I", "AA transport stalled notify sent");
+    if (holder.attached) {
+        g_vm->DetachCurrentThread();
+    }
+}
+
+void notifyJavaTransportStalledIfFatal(const error::Error& e, const char* label) {
+    if (e.getNativeCode() == kUsbBridgeFatalError) {
+        notifyJavaTransportStalled(label);
+    }
+}
+
 bool ensureMicInputBridge(JNIEnv* env) {
     if (g_mic_bridge_class != nullptr) {
         return true;
@@ -387,7 +444,10 @@ bool ensureBluetoothBridge(JNIEnv* env) {
 }
 
 bool warmJvmBindings(JNIEnv* env) {
-    return ensureProjectionSink(env) && ensureMicInputBridge(env) && ensureBluetoothBridge(env);
+    return ensureProjectionSink(env) &&
+           ensureUsbJniBridge(env) &&
+           ensureMicInputBridge(env) &&
+           ensureBluetoothBridge(env);
 }
 
 bool pushByteArrayToProjectionSink(
@@ -1398,6 +1458,7 @@ public:
         native_log::Logf(LOG_TAG, "E",
                          "AA video channel error code=%d native=%u",
                          static_cast<int>(e.getCode()), e.getNativeCode());
+        notifyJavaTransportStalledIfFatal(e, "video-channel");
         stopVideoSink();
     }
 
@@ -1550,6 +1611,7 @@ public:
         native_log::Logf(LOG_TAG, "E",
                          "AA %s channel error code=%d native=%u",
                          label_.c_str(), static_cast<int>(e.getCode()), e.getNativeCode());
+        notifyJavaTransportStalledIfFatal(e, label_.c_str());
         active_session_ = -1;
         if (render_to_sink_) {
             stopAudioSink(sink_id_);
@@ -1712,6 +1774,7 @@ public:
         native_log::Logf(LOG_TAG, "E",
                          "AA input channel error code=%d native=%u",
                          static_cast<int>(e.getCode()), e.getNativeCode());
+        notifyJavaTransportStalledIfFatal(e, "input-channel");
     }
 
 private:
@@ -1780,6 +1843,7 @@ public:
         native_log::Logf(LOG_TAG, "E",
                          "AA sensor channel error code=%d native=%u",
                          static_cast<int>(e.getCode()), e.getNativeCode());
+        notifyJavaTransportStalledIfFatal(e, "sensor-channel");
     }
 
 private:
@@ -1913,6 +1977,7 @@ public:
         native_log::Logf(LOG_TAG, "E",
                          "AA av input channel error code=%d native=%u",
                          static_cast<int>(e.getCode()), e.getNativeCode());
+        notifyJavaTransportStalledIfFatal(e, "av-input-channel");
         microphone_active_ = false;
         stopMicInput();
     }
@@ -1999,6 +2064,7 @@ public:
         native_log::Logf(LOG_TAG, "E",
                          "AA bluetooth channel error code=%d native=%u",
                          static_cast<int>(e.getCode()), e.getNativeCode());
+        notifyJavaTransportStalledIfFatal(e, "bluetooth-channel");
     }
 
     void receiveAgain() {
@@ -2143,6 +2209,7 @@ public:
         native_log::Logf(LOG_TAG, "E",
                          "AA control channel error code=%d native=%u",
                          static_cast<int>(e.getCode()), e.getNativeCode());
+        notifyJavaTransportStalledIfFatal(e, "control-channel");
     }
 
 private:
@@ -2381,6 +2448,7 @@ bool startAaSessionWithTransport(
     std::shared_ptr<transport::Transport> transport,
     const char* label) {
     native_log::Logf(LOG_TAG, "I", "AA session starting transport=%s", label);
+    g_transport_stall_notified.store(false);
     g_video_frame_count.store(0);
     resetVideoCadenceStats();
     g_touch_event_count.store(0);
@@ -2632,6 +2700,7 @@ Java_com_example_androidautodisplay_AasdkNative_nativeInit(JNIEnv* env, jobject)
     {
         std::lock_guard<std::mutex> lock(g_jni_mutex);
         ensureProjectionSink(env);
+        ensureUsbJniBridge(env);
     }
     installCrashHandlers();
     return JNI_TRUE;
