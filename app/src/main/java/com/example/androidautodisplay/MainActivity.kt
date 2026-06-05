@@ -314,7 +314,7 @@ class MainActivity : AppCompatActivity() {
                     usbCountersText.text = "${getString(R.string.usb_bytes_in)}: $bytesIn  " +
                         "${getString(R.string.usb_bytes_out)}: $bytesOut"
                     usbSendTestButton.isEnabled = false
-                    handleProjectionUsbState(state)
+                    handleProjectionUsbState(state, error)
                     usbStartAaButton.isEnabled = state == "READY_FOR_AA" && ready && !aasdkRunning
                     usbEnableAoapButton.isEnabled = state == "PRE_AA"
                     if (!probe.isNullOrBlank()) {
@@ -1169,7 +1169,7 @@ class MainActivity : AppCompatActivity() {
         hideSystemUi()
     }
 
-    private fun handleProjectionUsbState(state: String?) {
+    private fun handleProjectionUsbState(state: String?, error: String?) {
         if (!state.isNullOrBlank() && state != lastLoggedProjectionUsbState) {
             lastLoggedProjectionUsbState = state
             LogFileHelper.appendEvent(
@@ -1203,7 +1203,17 @@ class MainActivity : AppCompatActivity() {
             "PRE_AA",
             "AOAP_NEGOTIATING",
             "WAITING_FOR_AOAP_REENUMERATION" -> {
-                if (projectionStarting || aasdkRunning) {
+                if (error == "AA transport stalled") {
+                    LogFileHelper.appendEvent(
+                        this,
+                        "MainActivity",
+                        "projection reset after AA transport stall state=$state"
+                    )
+                    resetProjectionPipeline()
+                    projectionStarting = false
+                    aasdkRunning = false
+                    showLauncherScreen()
+                } else if (projectionStarting || aasdkRunning) {
                     showProjectionScreen()
                     projectionStatus.visibility = View.VISIBLE
                     projectionStatus.text = getString(R.string.projection_connecting)
