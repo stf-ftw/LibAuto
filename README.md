@@ -3,7 +3,7 @@
 
 **An experimental Android Auto head-unit receiver for Android tablets and aftermarket Android head units.**
 
-This repository is a customized fork of the original [stf-ftw/LibAuto](https://github.com/stf-ftw/LibAuto) project, featuring additional modifications, experimentation, and wireless Android Auto connectivity implementations.
+This repository is a customized fork of the original [stf-ftw/LibAuto](https://github.com/stf-ftw/LibAuto) project, featuring additional modifications, experimentation, multiple Android editions, and wireless Android Auto connectivity implementations.
 
 Customized and developed by **[AggarwalVansh](https://github.com/AggarwalVansh)**, with assistance from **AntiGravity and REA**.
 
@@ -28,10 +28,12 @@ This project is not affiliated with, endorsed by, sponsored by, or connected to 
 | Basic vehicle sensors | Implemented |
 | Bluetooth wireless connectivity | Implemented, testing |
 | Headunit Server wireless method | Implemented, testing |
+| Standard Edition | Available |
+| Legacy Edition | Available / Experimental |
 
 The USB projection implementation is functional, while wireless connectivity is currently undergoing testing.
 
-This fork builds upon the original LibAuto implementation and introduces additional development focused on expanding connectivity options and improving the overall head-unit experience.
+This fork builds upon the original LibAuto implementation and introduces additional development focused on expanding connectivity options, supporting different Android environments, and improving the overall head-unit experience.
 
 ### Wireless Android Auto Development
 
@@ -48,6 +50,39 @@ An alternative wireless connection approach based on the Headunit Server method.
 Both implementations are currently undergoing testing. Reliability, connection stability, and compatibility across different Android phones and head-unit devices are still being evaluated.
 
 Wireless functionality should be considered experimental and may not work consistently across all devices.
+
+---
+
+## Editions
+
+This fork provides two editions of LibAuto to accommodate different Android environments.
+
+### Standard Edition
+
+The Standard Edition is intended for modern Android devices.
+
+- Targets Android API 35.
+- Recommended for modern Android tablets and aftermarket head units.
+- Intended for normal installations and current Android environments.
+
+### Legacy Edition
+
+The Legacy Edition is intended for older Android environments.
+
+- Targets Android API 28.
+- Provides an alternative build for devices that may have compatibility limitations with the Standard Edition.
+- Intended for older Android devices and head units.
+
+### Which Edition Should You Choose?
+
+| Edition | Target API | Recommended For |
+|---|---:|---|
+| Standard | 35 | Modern Android devices |
+| Legacy | 28 | Older Android environments |
+
+**Recommendation:** Use the Standard Edition unless your device requires the Legacy Edition.
+
+Both editions belong to the same customized LibAuto project. Feature availability and compatibility may vary depending on the build and device.
 
 ---
 
@@ -81,7 +116,8 @@ Please visit the original repository for upstream development, original document
 ### Designed For
 
 - Android 8.0+ (`minSdk 26`).
-- Android 15 target (`targetSdk 35`).
+- Standard Edition: Android API 35 target.
+- Legacy Edition: Android API 28 target.
 - `armeabi-v7a` and `arm64-v8a` devices.
 - Displays around 800x480, 1024x600, 1280x720, 1920x1080, and native-aspect scaled modes.
 
@@ -110,27 +146,38 @@ Wireless requirements depend on the selected connection method and device compat
 - Sensor channel support for driving status, night mode, GPS speed, gear, and parking brake.
 - Conservative file logging to reduce unnecessary NAND writes.
 - Session reset on disconnect/replug to prevent stale decoder/framebuffer states.
+- Standard and Legacy editions for different Android environments.
 - Experimental wireless connectivity through Bluetooth and the Headunit Server method.
 
 ---
 
 ## Download & Installation
 
-**Download the latest available APK from GitHub Releases:**
+**Download the latest available APKs from GitHub Releases:**
 
 [**Download LibAuto →**](https://github.com/AggarwalVansh/LibAuto/releases)
 
-### Standard APK
+### Available Editions
 
-`LibAuto-standard.apk`
+**Standard Edition**
 
-Recommended for normal Android tablets and modern Android head units.
+Recommended for modern Android tablets and head units.
 
-Installation:
+**Legacy Edition**
+
+Alternative build intended for older Android environments.
+
+Check the release assets and select the edition appropriate for your device.
+
+### Installation
+
+You can install either APK manually or through ADB:
 
 ```bash
-adb install -r LibAuto-standard.apk
+adb install -r <APK_FILENAME>
 ```
+
+Replace `<APK_FILENAME>` with the actual downloaded APK filename.
 
 **Android application ID:**
 
@@ -165,7 +212,7 @@ Wireless connection methods are experimental and may require additional device-s
 - JDK 17.
 - Network access for initial vcpkg/native dependency setup unless the local cache is already populated.
 
-### Build Commands
+### Standard / Play Build
 
 ```bash
 ./gradlew assemblePlayRelease bundlePlayRelease
@@ -185,7 +232,9 @@ The standard APK is distributed as:
 LibAuto-standard.apk
 ```
 
-For current Google Play submissions, Google's [target API requirements](https://developer.android.com/google/play/requirements/target-sdk) apply. LibAuto's standard/Play flavor targets API 35.
+The Legacy Edition build configuration and its release artifact depend on the corresponding Gradle variant configured in the project.
+
+For current Google Play submissions, Google's [target API requirements](https://developer.android.com/google/play/requirements/target-sdk) apply. LibAuto's Standard/Play flavor targets API 35.
 
 ---
 
@@ -211,6 +260,7 @@ LibAuto/
 - Wireless connectivity is experimental and currently undergoing testing.
 - Bluetooth and Headunit Server connection methods may exhibit device-specific compatibility issues.
 - Some aftermarket head units restrict or virtualize USB devices, preventing third-party applications from accessing them.
+- The Standard and Legacy editions may have different compatibility characteristics depending on the Android environment.
 
 ---
 
@@ -263,6 +313,7 @@ When reporting issues, please include:
 - Android phone model and Android version.
 - Head-unit/tablet model and Android version.
 - Connection method (USB / Bluetooth / Headunit Server).
+- Edition used (Standard / Legacy).
 - Relevant logs and reproduction steps.
 
 ---
@@ -271,7 +322,7 @@ When reporting issues, please include:
 
 **[AggarwalVansh](https://github.com/AggarwalVansh)**
 
-Working on additional development, customizations, and experimental wireless Android Auto connectivity implementations.
+Working on additional development, customizations, multiple Android editions, and experimental wireless Android Auto connectivity implementations.
 
 - GitHub: [@AggarwalVansh](https://github.com/AggarwalVansh)
 - Fork: [AggarwalVansh/LibAuto](https://github.com/AggarwalVansh/LibAuto)
