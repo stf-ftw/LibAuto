@@ -1,6 +1,8 @@
 package com.example.androidautodisplay
 
 import android.Manifest
+import android.annotation.SuppressLint
+import android.bluetooth.BluetoothAdapter
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -16,6 +18,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.provider.Settings
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -98,6 +101,15 @@ class MainActivity : AppCompatActivity() {
     private lateinit var wirelessStatusText: TextView
     private lateinit var wirelessStartButton: Button
     private lateinit var wirelessStopButton: Button
+    private lateinit var wirelessBtDeviceInfo: TextView
+    private lateinit var wirelessOpenBtSettingsButton: Button
+    private lateinit var headunitServerIpInput: EditText
+    private lateinit var headunitServerPortInput: EditText
+    private lateinit var headunitServerConnectButton: Button
+    private lateinit var headunitServerStopButton: Button
+    private lateinit var headunitServerAutoDetectCheckbox: CheckBox
+    private lateinit var headunitServerScanStatus: TextView
+    private var pendingHeadunitServerStart = false
     private lateinit var aoapManufacturerInput: EditText
     private lateinit var aoapModelInput: EditText
     private lateinit var aoapDescriptionInput: EditText
@@ -205,6 +217,10 @@ class MainActivity : AppCompatActivity() {
         MicInputBridge.setPermissionGranted(granted)
         if (granted && pendingSelectedDeviceName != null) {
             continueSelectedDeviceStart()
+        } else if (granted && pendingHeadunitServerStart) {
+            if (ensureLocationPermissionForAaStart()) {
+                startHeadunitServerSession()
+            }
         } else if (granted && pendingWirelessAaStart) {
             if (ensureLocationPermissionForAaStart() && ensureBluetoothPermissionForAaStart()) {
                 startWirelessAaSession()
@@ -226,15 +242,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     private val bluetoothPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (!granted) {
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val allGranted = permissions.values.all { it }
+        if (!allGranted) {
             android.widget.Toast.makeText(
                 this,
-                "Bluetooth permission is needed for Android Auto call pairing",
+                "Bluetooth Connect, Scan, and Advertise permissions are needed for wireless Android Auto",
                 android.widget.Toast.LENGTH_LONG
             ).show()
         }
+        updateBluetoothInfo()
         if (pendingAaStartAfterBluetoothPermission) {
             if (pendingSelectedDeviceName != null) {
                 continueSelectedDeviceStart()
@@ -262,6 +280,8 @@ class MainActivity : AppCompatActivity() {
         if (pendingAaStartAfterLocationPermission) {
             if (pendingSelectedDeviceName != null) {
                 continueSelectedDeviceStart()
+            } else if (pendingHeadunitServerStart) {
+                startHeadunitServerSession()
             } else if (pendingWirelessAaStart && ensureBluetoothPermissionForAaStart()) {
                 startWirelessAaSession()
             } else if (ensureBluetoothPermissionForAaStart()) {
@@ -401,13 +421,21 @@ class MainActivity : AppCompatActivity() {
                     if (status == "bluetooth_connected" ||
                         status == "wifi_info_requested" ||
                         status == "wifi_connection_status" ||
-                        status == "wifi_start_response"
+                        status == "wifi_start_response" ||
+                        status == "headunit_server_connected" ||
+                        status == "connected"
                     ) {
                         statusText.text = getString(R.string.status_wifi)
                         if (projectionContainer.visibility != View.VISIBLE) {
                             showProjectionScreen()
+                        }
+                        projectionStatus.visibility = View.VISIBLE
+                        projectionStatus.text = details
+                    } else if (status == "failed" || status == "stopped") {
+                        if (projectionContainer.visibility == View.VISIBLE && !aasdkRunning) {
                             projectionStatus.visibility = View.VISIBLE
                             projectionStatus.text = details
+                            scheduleProjectionClose(status)
                         }
                     } else if (projectionContainer.visibility == View.VISIBLE && projectionStarting) {
                         projectionStatus.visibility = View.VISIBLE
@@ -470,6 +498,20 @@ class MainActivity : AppCompatActivity() {
         wirelessStatusText = findViewById(R.id.wireless_status_text)
         wirelessStartButton = findViewById(R.id.wireless_start_button)
         wirelessStopButton = findViewById(R.id.wireless_stop_button)
+        wirelessBtDeviceInfo = findViewById(R.id.wireless_bt_device_info)
+        wirelessOpenBtSettingsButton = findViewById(R.id.wireless_open_bt_settings_button)
+        headunitServerIpInput = findViewById(R.id.headunit_server_ip_input)
+        headunitServerPortInput = findViewById(R.id.headunit_server_port_input)
+        headunitServerConnectButton = findViewById(R.id.headunit_server_connect_button)
+        headunitServerStopButton = findViewById(R.id.headunit_server_stop_button)
+        headunitServerAutoDetectCheckbox = findViewById(R.id.headunit_server_auto_detect_checkbox)
+        headunitServerScanStatus = findViewById(R.id.headunit_server_scan_status)
+        val huPrefs = getSharedPreferences(Constants.HEADUNIT_SERVER_PREFS, MODE_PRIVATE)
+        val defaultGateway = NetworkInfoProvider.getGatewayAddress(this)
+        val isAutoDetect = huPrefs.getBoolean(Constants.PREF_HEADUNIT_SERVER_AUTO_DETECT, true)
+        headunitServerAutoDetectCheckbox.isChecked = isAutoDetect
+        headunitServerIpInput.setText(huPrefs.getString(Constants.PREF_HEADUNIT_SERVER_HOST, defaultGateway))
+        headunitServerPortInput.setText(huPrefs.getInt(Constants.PREF_HEADUNIT_SERVER_PORT, Constants.DEFAULT_TRANSPORT_PORT).toString())
         aoapManufacturerInput = findViewById(R.id.aoap_manufacturer_input)
         aoapModelInput = findViewById(R.id.aoap_model_input)
         aoapDescriptionInput = findViewById(R.id.aoap_description_input)
@@ -485,6 +527,12 @@ class MainActivity : AppCompatActivity() {
         testAudioButton = findViewById(R.id.test_audio_button)
         videoSink = VideoSink(videoSurface)
         AaProjectionSink.bindSurfaceView(videoSurface)
+        AaProjectionSink.onFirstFrameRendered = {
+            runOnUiThread {
+                projectionStatus.visibility = View.GONE
+                aasdkRunning = true
+            }
+        }
         configureProjectionTouch()
         configureProjectionResolutionPicker()
         configureAutoConnect()
@@ -626,10 +674,46 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        wirelessOpenBtSettingsButton.setOnClickListener {
+            try {
+                startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
+            } catch (ex: Exception) {
+                android.widget.Toast.makeText(this, "Cannot open Bluetooth settings: ${ex.message}", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+
         wirelessStopButton.setOnClickListener {
             pendingWirelessAaStart = false
             startService(Intent(this, ProjectionService::class.java).apply {
                 action = Constants.ACTION_WIRELESS_STOP
+            })
+            showLauncherScreen()
+        }
+
+        headunitServerAutoDetectCheckbox.setOnCheckedChangeListener { _, isChecked ->
+            getSharedPreferences(Constants.HEADUNIT_SERVER_PREFS, MODE_PRIVATE).edit()
+                .putBoolean(Constants.PREF_HEADUNIT_SERVER_AUTO_DETECT, isChecked)
+                .apply()
+            headunitServerScanStatus.text = if (isChecked) {
+                "Tap Connect: automatically scans hotspot / Wi-Fi for phone"
+            } else {
+                "Manual mode: enter your phone's IP and port below"
+            }
+        }
+
+        headunitServerConnectButton.setOnClickListener {
+            pendingHeadunitServerStart = true
+            if (ensureMicrophonePermissionForAaStart() &&
+                ensureLocationPermissionForAaStart()
+            ) {
+                startHeadunitServerSession()
+            }
+        }
+
+        headunitServerStopButton.setOnClickListener {
+            pendingHeadunitServerStart = false
+            startService(Intent(this, ProjectionService::class.java).apply {
+                action = Constants.ACTION_HEADUNIT_SERVER_STOP
             })
             showLauncherScreen()
         }
@@ -688,6 +772,7 @@ class MainActivity : AppCompatActivity() {
         MicInputBridge.setPermissionGranted(hasMicrophonePermission())
         updateWifiStatus()
         updateNetworkInfo()
+        updateBluetoothInfo()
         loadTargetInputs()
         refreshUsbDeviceList()
         ContextCompat.startForegroundService(this, Intent(this, ProjectionService::class.java).apply {
@@ -1355,7 +1440,15 @@ class MainActivity : AppCompatActivity() {
                     return
                 }
                 if (projectionContainer.visibility == View.VISIBLE) {
-                    sendAaButtonClick(AA_KEYCODE_BACK)
+                    if (aasdkRunning) {
+                        sendAaButtonClick(AA_KEYCODE_BACK)
+                    } else {
+                        // Cancel connection in progress and return to launcher
+                        showLauncherScreen()
+                        stopService(Intent(this@MainActivity, ProjectionService::class.java).apply {
+                            action = Constants.ACTION_STOP
+                        })
+                    }
                     return
                 }
                 isEnabled = false
@@ -2157,7 +2250,7 @@ class MainActivity : AppCompatActivity() {
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             pendingAaStartAfterBluetoothPermission = true
-            bluetoothPermissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
+            bluetoothPermissionLauncher.launch(BluetoothBridge.getRequiredBluetoothPermissions())
             return false
         }
         return true
@@ -2173,6 +2266,38 @@ class MainActivity : AppCompatActivity() {
                 Manifest.permission.ACCESS_COARSE_LOCATION
             )
         )
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun updateBluetoothInfo() {
+        val adapter = try {
+            BluetoothAdapter.getDefaultAdapter()
+        } catch (_: Exception) {
+            null
+        }
+        if (adapter == null) {
+            wirelessBtDeviceInfo.text = "Bluetooth not supported on this device"
+            return
+        }
+        if (!adapter.isEnabled) {
+            wirelessBtDeviceInfo.text = "Bluetooth is turned OFF. Please turn on Bluetooth on phone and stereo."
+            return
+        }
+        if (!BluetoothBridge.hasAllBluetoothPermissions(this)) {
+            wirelessBtDeviceInfo.text = "Bluetooth permissions needed. Tap Start to grant."
+            return
+        }
+        val bonded = try {
+            adapter.bondedDevices?.toList().orEmpty()
+        } catch (_: Exception) {
+            emptyList()
+        }
+        if (bonded.isEmpty()) {
+            wirelessBtDeviceInfo.text = getString(R.string.wireless_method1_bt_no_paired)
+        } else {
+            val names = bonded.joinToString(", ") { it.name ?: it.address }
+            wirelessBtDeviceInfo.text = getString(R.string.wireless_method1_bt_paired, names)
+        }
     }
 
     private fun startAaSession() {
@@ -2199,6 +2324,79 @@ class MainActivity : AppCompatActivity() {
         CarSensorBridge.start()
         ContextCompat.startForegroundService(this, Intent(this, ProjectionService::class.java).apply {
             action = Constants.ACTION_WIRELESS_START
+        })
+    }
+
+    private fun startHeadunitServerSession() {
+        cancelPendingProjectionClose()
+        pendingHeadunitServerStart = false
+        val port = headunitServerPortInput.text.toString().trim().toIntOrNull() ?: Constants.DEFAULT_TRANSPORT_PORT
+        val autoDetect = headunitServerAutoDetectCheckbox.isChecked
+        val manualIp = headunitServerIpInput.text.toString().trim()
+
+        if (autoDetect) {
+            headunitServerScanStatus.text = getString(R.string.wireless_method2_scanning)
+            headunitServerConnectButton.isEnabled = false
+            Thread({
+                val scanResult = HeadunitServerScanner.findServer(
+                    context = this,
+                    targetPort = port,
+                    preferredIp = if (manualIp.isNotBlank() && manualIp != "127.0.0.1") manualIp else null,
+                    onProgress = { status ->
+                        runOnUiThread {
+                            headunitServerScanStatus.text = status
+                        }
+                    }
+                )
+                runOnUiThread {
+                    headunitServerConnectButton.isEnabled = true
+                    if (scanResult != null) {
+                        val foundIp = scanResult.ip
+                        val foundPort = scanResult.port
+                        headunitServerScanStatus.text = "Found phone at $foundIp:$foundPort! Connecting..."
+                        headunitServerIpInput.setText(foundIp)
+                        headunitServerPortInput.setText(foundPort.toString())
+                        getSharedPreferences(Constants.HEADUNIT_SERVER_PREFS, MODE_PRIVATE).edit()
+                            .putString(Constants.PREF_HEADUNIT_SERVER_HOST, foundIp)
+                            .putInt(Constants.PREF_HEADUNIT_SERVER_PORT, foundPort)
+                            .apply()
+                        launchHeadunitServerProjection(foundIp, foundPort)
+                    } else {
+                        val gateway = NetworkInfoProvider.getGatewayAddress(this)
+                        headunitServerScanStatus.text = getString(R.string.wireless_method2_not_found)
+                        android.app.AlertDialog.Builder(this)
+                            .setTitle("Phone Not Detected")
+                            .setMessage("Could not auto-detect phone with Headunit Server on your network.\n\nMake sure:\n1. Your phone's Mobile Hotspot is ON and this device is connected to it.\n2. In Android Auto Developer settings on your phone, tap 3 dots -> 'Start head unit server'.\n\nWould you like to try connecting to default gateway ($gateway:$port) anyway?")
+                            .setPositiveButton("Try Gateway") { _, _ ->
+                                launchHeadunitServerProjection(gateway, port)
+                            }
+                            .setNegativeButton("Cancel", null)
+                            .show()
+                    }
+                }
+            }, "libauto-headunit-scanner").start()
+        } else {
+            val host = if (manualIp.isNotBlank()) manualIp else NetworkInfoProvider.getGatewayAddress(this)
+            getSharedPreferences(Constants.HEADUNIT_SERVER_PREFS, MODE_PRIVATE).edit()
+                .putString(Constants.PREF_HEADUNIT_SERVER_HOST, host)
+                .putInt(Constants.PREF_HEADUNIT_SERVER_PORT, port)
+                .apply()
+            launchHeadunitServerProjection(host, port)
+        }
+    }
+
+    private fun launchHeadunitServerProjection(host: String, port: Int) {
+        projectionStarting = true
+        aasdkRunning = false
+        wirelessStatusText.text = getString(R.string.wireless_status_connecting)
+        CarSensorBridge.start()
+        showProjectionScreen()
+        projectionStatus.visibility = View.VISIBLE
+        projectionStatus.text = "Connecting to Headunit Server at $host:$port..."
+        ContextCompat.startForegroundService(this, Intent(this, ProjectionService::class.java).apply {
+            action = Constants.ACTION_HEADUNIT_SERVER_START
+            putExtra(Constants.EXTRA_HEADUNIT_SERVER_HOST, host)
+            putExtra(Constants.EXTRA_HEADUNIT_SERVER_PORT, port)
         })
     }
 

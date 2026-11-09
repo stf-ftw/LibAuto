@@ -59,21 +59,40 @@ class WirelessAaController(
 
     fun getSnapshot(): Snapshot = currentSnapshot
 
-    fun start(port: Int = Constants.DEFAULT_TRANSPORT_PORT): Boolean {
+    fun start(port: Int = Constants.DEFAULT_WIRELESS_AA_PORT): Boolean {
         if (!running.compareAndSet(false, true)) {
             return true
         }
         bootstrapConnected.set(false)
         bleAdvertiseBroken = false
-        update("starting", "Starting wireless Android Auto")
+        update("starting", "Starting wireless Android Auto (Bluetooth + Phone Hotspot)...")
+        AasdkNative.nativeStopAaSession()
+        Thread.sleep(200)
+
         val nativeStarted = AasdkNative.nativeStartAaOverTcp(port)
         if (!nativeStarted) {
             update("failed", "TCP listener failed: ${AasdkNative.nativeGetLastError()}")
             running.set(false)
             return false
         }
-        update("tcp_listening", "AA TCP listener ready on port $port; starting hotspot")
-        startHotspotThenBluetooth(port)
+        val currentIp = NetworkInfoProvider.getWifiIpAddress() ?: bestLocalIpAddress()
+        val currentSsid = WifiInfoProvider.getWifiSsid(appContext)
+        val bssid = findWifiMacAddress()
+        val isWifiActive = currentSsid != "not connected" && !currentSsid.contains("unknown")
+
+        val statusMsg = if (isWifiActive) {
+            "AA TCP listening on $currentIp:$port (Wi-Fi: $currentSsid); waiting for Bluetooth bootstrap"
+        } else {
+            "AA TCP listening on port $port; please connect stereo to phone hotspot; waiting for Bluetooth bootstrap"
+        }
+        update("tcp_listening", statusMsg)
+        startBluetoothServer(
+            ssid = if (isWifiActive) currentSsid else "",
+            password = "",
+            bssid = bssid,
+            port = port,
+            dynamicAp = false
+        )
         return true
     }
 
@@ -142,30 +161,32 @@ class WirelessAaController(
         dynamicAp: Boolean
     ) {
         if (!hasBluetoothPermission()) {
-            update("failed", "Bluetooth permission missing")
+            update("failed", "Bluetooth permission missing. Please grant Bluetooth permissions.")
             running.set(false)
             return
         }
         val adapter = BluetoothAdapter.getDefaultAdapter()
         if (adapter == null || !adapter.isEnabled) {
-            update("failed", "Bluetooth is off")
+            update("failed", "Bluetooth is off on stereo. Please turn Bluetooth on.")
             running.set(false)
             return
         }
-        if (startBleGattServer()) {
-            startBleAdvertising(adapter)
-        } else {
-            bleAdvertiseBroken = true
-            logger("Wireless BLE advertise skipped: GATT server unavailable")
+        try {
+            if (adapter.isMultipleAdvertisementSupported) {
+                if (startBleGattServer()) {
+                    startBleAdvertising(adapter)
+                }
+            } else {
+                logger("Wireless BLE advertise skipped: controller does not support multiple advertisements")
+            }
+        } catch (ex: Exception) {
+            logger("Wireless BLE setup skipped: ${ex.message}")
         }
-        for (endpoint in AA_WIRELESS_ENDPOINTS) {
-            val worker = Thread({
-                listenForBluetoothClient(adapter, endpoint, ssid, password, bssid, port, dynamicAp)
-            }, "LibAuto-WirelessBootstrap-${endpoint.label}")
-            workers += worker
-            worker.start()
-        }
-        startOutboundBluetoothBootstrap(adapter, ssid, password, bssid, port, dynamicAp)
+        val worker = Thread({
+            listenForBluetoothClient(adapter, ssid, password, bssid, port, dynamicAp)
+        }, "LibAuto-WirelessBluetoothListener")
+        workers += worker
+        worker.start()
     }
 
     @SuppressLint("MissingPermission")
@@ -313,125 +334,131 @@ class WirelessAaController(
     @SuppressLint("MissingPermission")
     private fun listenForBluetoothClient(
         adapter: BluetoothAdapter,
-        endpoint: RfcommEndpoint,
         ssid: String,
         password: String,
         bssid: String,
         port: Int,
         dynamicAp: Boolean
     ) {
+        val primaryUuid = UUID.fromString("4de17a00-52cb-11e6-bdf4-0800200c9a66")
+        val altUuid = UUID.fromString("4de48490-8ab7-4fd6-970a-0ae4142618e3")
+
+        var serverSocket: BluetoothServerSocket? = null
+
+        // Try secure RFCOMM first on standard AA UUID; if stereo HAL does not support secure, fallback to insecure
         try {
-            val socket = if (endpoint.secure) {
-                adapter.listenUsingRfcommWithServiceRecord(
-                    RFCOMM_SERVICE_NAME,
-                    endpoint.uuid
-                )
-            } else {
-                adapter.listenUsingInsecureRfcommWithServiceRecord(
-                    RFCOMM_SERVICE_NAME,
-                    endpoint.uuid
-                )
-            }
-            synchronized(serverSockets) {
-                serverSockets += socket
-            }
-            logger(
-                "Wireless RFCOMM listening label=${endpoint.label} uuid=${endpoint.uuid} " +
-                    "secure=${endpoint.secure}"
-            )
-            update(
-                "bluetooth_listening",
-                "Bluetooth bootstrap listening on ${endpoint.label}; pair/connect from Android Auto"
-            )
-            val client = socket.accept() ?: return
-            if (!bootstrapConnected.compareAndSet(false, true)) {
-                client.close()
-                return
-            }
-            clientSocket = client
-            closeServerSocketsExcept(socket)
-            val remote = safeRemoteName(client.remoteDevice)
-            update(
-                "bluetooth_connected",
-                "Bluetooth bootstrap connected on ${endpoint.label}: $remote"
-            )
-            handleRfcomm(client.inputStream, client.outputStream, ssid, password, bssid, port, dynamicAp)
-        } catch (ex: Exception) {
-            if (running.get()) {
-                LogFileHelper.appendException(appContext, "Wireless Bluetooth bootstrap failed (${endpoint.label})", ex)
-                logger("Wireless Bluetooth bootstrap failed on ${endpoint.label}: ${ex.message}")
+            serverSocket = adapter.listenUsingRfcommWithServiceRecord("AndroidAuto", primaryUuid)
+            logger("Wireless RFCOMM secure listener registered on $primaryUuid")
+        } catch (ex1: Exception) {
+            logger("Wireless RFCOMM secure listen failed ($primaryUuid): ${ex1.message}, trying insecure...")
+            try {
+                serverSocket = adapter.listenUsingInsecureRfcommWithServiceRecord("AndroidAuto", primaryUuid)
+                logger("Wireless RFCOMM insecure listener registered on $primaryUuid")
+            } catch (ex2: Exception) {
+                logger("Wireless RFCOMM insecure listen failed: ${ex2.message}, trying alt UUID...")
+                try {
+                    serverSocket = adapter.listenUsingInsecureRfcommWithServiceRecord("AndroidAuto", altUuid)
+                    logger("Wireless RFCOMM insecure listener registered on alt $altUuid")
+                } catch (ex3: Exception) {
+                    logger("All RFCOMM server socket registrations failed: ${ex3.message}")
+                    update(
+                        "failed",
+                        "Stereo Bluetooth RFCOMM not supported by car hardware (${ex3.message}). Please use Headunit Server method."
+                    )
+                    return
+                }
             }
         }
-    }
 
-    @SuppressLint("MissingPermission")
-    private fun startOutboundBluetoothBootstrap(
-        adapter: BluetoothAdapter,
-        ssid: String,
-        password: String,
-        bssid: String,
-        port: Int,
-        dynamicAp: Boolean
-    ) {
-        val bondedDevices = try {
+        if (serverSocket == null) return
+
+        synchronized(serverSockets) {
+            serverSockets += serverSocket
+        }
+
+        val bondedNames = try {
+            adapter.bondedDevices?.mapNotNull { it.name }?.joinToString(", ") ?: "none"
+        } catch (_: Exception) {
+            "none"
+        }
+        update(
+            "bluetooth_listening",
+            "Waiting for phone connection via Bluetooth... (Paired: $bondedNames)"
+        )
+
+        // If paired phones exist, give inbound 3.5 seconds, then attempt outbound connect to trigger phone AA
+        val bondedPhones = try {
             adapter.bondedDevices?.toList().orEmpty()
-        } catch (ex: Exception) {
-            logger("Wireless outbound RFCOMM skipped: cannot read bonded devices: ${ex.message}")
+        } catch (_: Exception) {
             emptyList()
         }
-        if (bondedDevices.isEmpty()) {
-            logger("Wireless outbound RFCOMM skipped: no bonded devices")
-            return
+        if (bondedPhones.isNotEmpty()) {
+            val outboundWorker = Thread({
+                try {
+                    Thread.sleep(3500)
+                    if (!running.get() || bootstrapConnected.get()) return@Thread
+                    for (phone in bondedPhones) {
+                        if (!running.get() || bootstrapConnected.get()) break
+                        val remoteName = safeRemoteName(phone)
+                        logger("Attempting outbound Bluetooth RFCOMM trigger to $remoteName...")
+                        val socketFactories = listOf(
+                            { phone.createRfcommSocketToServiceRecord(primaryUuid) },
+                            { phone.createInsecureRfcommSocketToServiceRecord(primaryUuid) },
+                            { phone.createInsecureRfcommSocketToServiceRecord(altUuid) }
+                        )
+                        for (factory in socketFactories) {
+                            if (!running.get() || bootstrapConnected.get()) break
+                            try {
+                                val sock = factory()
+                                sock.connect()
+                                if (bootstrapConnected.compareAndSet(false, true)) {
+                                    clientSocket = sock
+                                    closeBluetoothServers()
+                                    update(
+                                        "bluetooth_connected",
+                                        "Connected to $remoteName via Bluetooth! Launching projection..."
+                                    )
+                                    handleRfcomm(sock.inputStream, sock.outputStream, ssid, password, bssid, port, dynamicAp)
+                                    break
+                                } else {
+                                    sock.close()
+                                }
+                            } catch (e: Exception) {
+                                logger("Outbound RFCOMM attempt to $remoteName failed: ${e.message}")
+                            }
+                        }
+                    }
+                } catch (_: InterruptedException) {}
+            }, "LibAuto-WirelessBluetoothOutbound")
+            workers += outboundWorker
+            outboundWorker.start()
         }
-        for (device in bondedDevices) {
-            for (endpoint in OUTBOUND_WIRELESS_ENDPOINTS) {
-                val worker = Thread({
-                    connectBluetoothClient(device, endpoint, ssid, password, bssid, port, dynamicAp)
-                }, "LibAuto-WirelessOutbound-${endpoint.label}")
-                workers += worker
-                worker.start()
-            }
-        }
-    }
 
-    @SuppressLint("MissingPermission")
-    private fun connectBluetoothClient(
-        device: BluetoothDevice,
-        endpoint: RfcommEndpoint,
-        ssid: String,
-        password: String,
-        bssid: String,
-        port: Int,
-        dynamicAp: Boolean
-    ) {
-        if (!running.get() || bootstrapConnected.get()) {
-            return
-        }
-        val remote = safeRemoteName(device)
         try {
-            logger(
-                "Wireless outbound RFCOMM trying label=${endpoint.label} uuid=${endpoint.uuid} " +
-                    "secure=${endpoint.secure} remote=$remote"
-            )
-            val socket = if (endpoint.secure) {
-                device.createRfcommSocketToServiceRecord(endpoint.uuid)
-            } else {
-                device.createInsecureRfcommSocketToServiceRecord(endpoint.uuid)
+            while (running.get() && !bootstrapConnected.get()) {
+                val client = try {
+                    serverSocket.accept()
+                } catch (e: Exception) {
+                    if (running.get()) {
+                        logger("RFCOMM accept closed: ${e.message}")
+                    }
+                    break
+                } ?: break
+
+                if (!bootstrapConnected.compareAndSet(false, true)) {
+                    try { client.close() } catch (_: Exception) {}
+                    break
+                }
+
+                clientSocket = client
+                val remoteName = safeRemoteName(client.remoteDevice)
+                update("bluetooth_connected", "Bluetooth connected: $remoteName! Launching projection...")
+
+                handleRfcomm(client.inputStream, client.outputStream, ssid, password, bssid, port, dynamicAp)
+                break
             }
-            socket.connect()
-            if (!bootstrapConnected.compareAndSet(false, true)) {
-                socket.close()
-                return
-            }
-            clientSocket = socket
-            closeBluetoothServers()
-            update(
-                "bluetooth_connected",
-                "Bluetooth bootstrap connected outbound on ${endpoint.label}: $remote"
-            )
-            handleRfcomm(socket.inputStream, socket.outputStream, ssid, password, bssid, port, dynamicAp)
-        } catch (ex: Exception) {
-            logger("Wireless outbound RFCOMM failed ${endpoint.label} remote=$remote: ${ex.message}")
+        } finally {
+            try { serverSocket.close() } catch (_: Exception) {}
         }
     }
 
@@ -444,15 +471,25 @@ class WirelessAaController(
         port: Int,
         dynamicAp: Boolean
     ) {
+        var resolvedIp = NetworkInfoProvider.getWifiIpAddress()
+        if (resolvedIp.isNullOrBlank()) {
+            update("waiting_wifi", "Bluetooth connected! Waiting for Wi-Fi connection...")
+            for (i in 1..8) {
+                try { Thread.sleep(500) } catch (_: InterruptedException) { break }
+                resolvedIp = NetworkInfoProvider.getWifiIpAddress()
+                if (!resolvedIp.isNullOrBlank()) break
+            }
+        }
+        val currentIp = resolvedIp ?: bestLocalIpAddress()
         update(
             "bootstrap_sending",
-            "Sending wireless bootstrap: ssid=$ssid ip=${bestLocalIpAddress()} port=$port bssid=$bssid dynamic=$dynamicAp"
+            "Sending wireless bootstrap: ip=$currentIp port=$port"
         )
         sendFrame(output, AawBootstrapProtocol.MESSAGE_WIFI_VERSION_REQUEST)
         sendFrame(
             output,
             AawBootstrapProtocol.MESSAGE_WIFI_START_REQUEST,
-            AawBootstrapProtocol.wifiStartRequest(bestLocalIpAddress(), port)
+            AawBootstrapProtocol.wifiStartRequest(currentIp, port)
         )
         val buffer = mutableListOf<Byte>()
         val chunk = ByteArray(1024)
@@ -469,7 +506,7 @@ class WirelessAaController(
             for (frame in AawBootstrapProtocol.decodeFrames(buffer)) {
                 when (frame.messageId) {
                     AawBootstrapProtocol.MESSAGE_WIFI_INFO_REQUEST -> {
-                        update("wifi_info_requested", "Phone requested Wi-Fi credentials for $ssid")
+                        update("wifi_info_requested", "Phone requested Wi-Fi credentials")
                         sendFrame(
                             output,
                             AawBootstrapProtocol.MESSAGE_WIFI_INFO_RESPONSE,
@@ -478,6 +515,11 @@ class WirelessAaController(
                     }
                     AawBootstrapProtocol.MESSAGE_WIFI_VERSION_RESPONSE -> {
                         logger("Wireless version response: ${AawBootstrapProtocol.wifiVersionSummary(frame.payload)}")
+                        sendFrame(
+                            output,
+                            AawBootstrapProtocol.MESSAGE_WIFI_START_REQUEST,
+                            AawBootstrapProtocol.wifiStartRequest(currentIp, port)
+                        )
                     }
                     AawBootstrapProtocol.MESSAGE_WIFI_START_RESPONSE -> {
                         val status = AawBootstrapProtocol.wifiStartResponseStatus(frame.payload)

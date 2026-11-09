@@ -1,154 +1,341 @@
+
 # LibAuto
 
-LibAuto is an Android USB-host head-unit app that runs Android Auto projection on tablets and aftermarket Android head units. It speaks Android Open Accessory / Android Auto over USB, decodes the phone-provided media stream locally, forwards touch/media controls back to the phone, and presents a fullscreen in-car UI.
+**An experimental Android Auto head-unit receiver for Android tablets and aftermarket Android head units.**
+
+This repository is a customized fork of the original [stf-ftw/LibAuto](https://github.com/stf-ftw/LibAuto) project, featuring additional modifications, experimentation, multiple Android editions, and wireless Android Auto connectivity implementations.
+
+Customized and developed by **[AggarwalVansh](https://github.com/AggarwalVansh)**, with assistance from **AntiGravity and REA**.
+
+LibAuto brings Android Auto projection to Android devices through USB and experimental wireless connectivity. It handles phone connectivity, projection decoding, audio playback, touch input, media controls, and vehicle sensor data locally.
 
 This project is not affiliated with, endorsed by, sponsored by, or connected to Google, Android, Android Auto, or any vehicle/head-unit vendor. Android, Android Auto, Google, and other product names are trademarks of their respective owners.
 
-![LibAuto waiting screen](docs/screenshots/screenshot1.jpg)
+---
 
-![LibAuto projection session](docs/screenshots/screenshot2.jpg)
+## Project Status
 
-## Current Status
+| Component | Status |
+|---|---|
+| USB Android Auto projection | Functional |
+| Automatic AOAP initialization | Implemented |
+| Video decoding and rendering | Implemented |
+| Audio playback | Implemented |
+| Touch and gesture forwarding | Implemented |
+| Hardware/media key forwarding | Implemented |
+| Microphone channel | Implemented |
+| GPS-backed vehicle speed | Implemented |
+| Basic vehicle sensors | Implemented |
+| Bluetooth wireless connectivity | Implemented, testing |
+| Headunit Server wireless method | Implemented, testing |
+| Standard Edition | Available |
+| Legacy Edition | Available / Experimental |
 
-LibAuto is usable as an experimental head-unit app. The tested happy path is:
+The USB projection implementation is functional, while wireless connectivity is currently undergoing testing.
 
-- USB Android Auto starts from a connected Android phone.
-- The app can automatically enable AOAP/accessory mode and start projection.
-- Video, audio, touch, two-finger gestures, and media keys are implemented.
-- GPS-backed vehicle speed and basic fake-car sensors are sent when requested.
-- The UI is fullscreen and optimized for 1024x600, 16:10 tablet displays, and common 16:9 projection sizes.
-- Experimental wireless Android Auto work is present in the codebase, but the launcher controls are hidden until the Bluetooth/Wi-Fi bootstrap is reliable enough for testing.
+This fork builds upon the original LibAuto implementation and introduces additional development focused on expanding connectivity options, supporting different Android environments, and improving the overall head-unit experience.
 
-This is still not a certified Android Auto receiver. Expect device-specific behavior, especially on heavily modified Android head units.
+### Wireless Android Auto Development
+
+Wireless connectivity has been experimentally implemented using two approaches:
+
+**1. Bluetooth-based connection**
+
+An experimental wireless connectivity implementation using Bluetooth.
+
+**2. Headunit Server method**
+
+An alternative wireless connection approach based on the Headunit Server method.
+
+Both implementations are currently undergoing testing. Reliability, connection stability, and compatibility across different Android phones and head-unit devices are still being evaluated.
+
+Wireless functionality should be considered experimental and may not work consistently across all devices.
+
+---
+
+## Editions
+
+This fork provides two editions of LibAuto to accommodate different Android environments.
+
+### Standard Edition
+
+The Standard Edition is intended for modern Android devices.
+
+- Targets Android API 35.
+- Recommended for modern Android tablets and aftermarket head units.
+- Intended for normal installations and current Android environments.
+
+### Legacy Edition
+
+The Legacy Edition is intended for older Android environments.
+
+- Targets Android API 28.
+- Provides an alternative build for devices that may have compatibility limitations with the Standard Edition.
+- Intended for older Android devices and head units.
+
+### Which Edition Should You Choose?
+
+| Edition | Target API | Recommended For |
+|---|---:|---|
+| Standard | 35 | Modern Android devices |
+| Legacy | 28 | Older Android environments |
+
+**Recommendation:** Use the Standard Edition unless your device requires the Legacy Edition.
+
+Both editions belong to the same customized LibAuto project. Feature availability and compatibility may vary depending on the build and device.
+
+---
+
+## Original Project & Credits
+
+This repository is a fork and customized continuation of:
+
+**[stf-ftw/LibAuto](https://github.com/stf-ftw/LibAuto)**
+
+All original project work, existing implementations, and contributions from the upstream repository remain credited to their respective original authors and contributors.
+
+A huge thank you to **[@stf-ftw](https://github.com/stf-ftw)** for creating and maintaining the original LibAuto project and making this fork possible.
+
+This fork builds upon that foundation with additional modifications and experimental development, particularly around wireless Android Auto connectivity through Bluetooth and the Headunit Server method.
+
+Additional development and customization have been carried out with assistance from **AntiGravity and REA**, guided by my own ideas and experimentation.
+
+Please visit the original repository for upstream development, original documentation, and project history:
+
+[**Original LibAuto Repository →**](https://github.com/stf-ftw/LibAuto)
+
+---
 
 ## Compatible Platforms
 
-Known working:
+### Known Working
 
 - HarmonyOS 4.2 / Android 12 tablet, Snapdragon 865, USB host mode.
-- Android aftermarket head units that can install normal APKs and expose USB host devices to apps.
+- Android aftermarket head units that support normal APK installation and expose USB host devices to applications.
 
-Designed for:
+### Designed For
 
 - Android 8.0+ (`minSdk 26`).
-- Android 15 target (`targetSdk 35`) for the standard/Play build.
-- Legacy target (`targetSdk 28`) for sideload-only head-unit builds that reject modern APK metadata.
+- Standard Edition: Android API 35 target.
+- Legacy Edition: Android API 28 target.
 - `armeabi-v7a` and `arm64-v8a` devices.
-- Screens around 800x480, 1024x600, 1280x720, 1920x1080, and native-aspect scaled modes.
+- Displays around 800x480, 1024x600, 1280x720, 1920x1080, and native-aspect scaled modes.
 
-Requirements:
+### Requirements
 
-- USB host support.
-- A cable and port that expose the phone as a USB device to Android.
-- Runtime permissions for USB, microphone, and location if you want voice/GPS-backed vehicle data.
+- USB host support for wired projection.
+- A compatible USB cable and port.
+- Runtime permissions for USB, microphone, and location where required.
 - A phone with Android Auto installed and enabled for wired projection.
+
+Wireless requirements depend on the selected connection method and device compatibility.
+
+---
 
 ## Features
 
 - One-tap session start from a connected USB device list.
 - Optional autoconnect when exactly one USB device is present.
-- Projection quality options: 480p, 720p, 1080p.
-- Native-aspect option for non-16:9 head-unit screens.
+- Projection quality options: 480p, 720p, and 1080p.
+- Native-aspect option for non-16:9 displays.
 - Local video rendering with letterbox/fill handling.
 - Touch and two-pointer gesture forwarding.
 - Learnable hardware/media key forwarding for play, pause, stop, next, previous, rewind, fast-forward, voice, call, and related controls.
 - Audio playback through Android `AudioTrack`.
 - Microphone channel support for Android Auto voice input.
 - Sensor channel support for driving status, night mode, GPS speed, gear, and parking brake.
-- Conservative file logging to avoid excessive NAND writes on head units.
-- Session reset on disconnect/replug so stale framebuffers do not block the next run.
+- Conservative file logging to reduce unnecessary NAND writes.
+- Session reset on disconnect/replug to prevent stale decoder/framebuffer states.
+- Standard and Legacy editions for different Android environments.
+- Experimental wireless connectivity through Bluetooth and the Headunit Server method.
 
-## Install
+---
 
-Download `LibAuto-standard.apk` first.
+## Download & Installation
 
-If it does not install or crashes immediately on an older/Chinese Android head unit, try `LibAuto-legacy-headunit.apk` instead.
+**Download the latest available APKs from GitHub Releases:**
 
-Use the standard APK for normal Android tablets, modern head units, and Play-equivalent testing:
+[**Download LibAuto →**](https://github.com/AggarwalVansh/LibAuto/releases)
+
+### Available Editions
+
+**Standard Edition**
+
+Recommended for modern Android tablets and head units.
+
+**Legacy Edition**
+
+Alternative build intended for older Android environments.
+
+Check the release assets and select the edition appropriate for your device.
+
+### Installation
+
+You can install either APK manually or through ADB:
 
 ```bash
-adb install -r LibAuto-standard.apk
+adb install -r <APK_FILENAME>
 ```
 
-Use the legacy head-unit APK only for problematic sideloaded Android head units:
+Replace `<APK_FILENAME>` with the actual downloaded APK filename.
 
-```bash
-adb install -r LibAuto-legacy-headunit.apk
-```
-
-The Play Store build is the same target-SDK family as `LibAuto-standard.apk`; the legacy APK is not intended for Play upload.
-
-The Android package/application id is:
+**Android application ID:**
 
 ```text
 ro.stf_ftw.libauto
 ```
 
+---
+
 ## Usage
 
-1. Open LibAuto on the tablet/head unit.
-2. Choose projection quality and whether to use native screen aspect.
-3. Plug in the phone.
-4. Tap the detected USB device, or enable autoconnect if only one device will be connected.
+1. Install and open LibAuto on your Android tablet or head unit.
+2. Select the desired projection quality.
+3. Configure native screen aspect if required.
+4. Connect your Android phone using the supported connection method.
 5. Accept Android Auto prompts on the phone if shown.
-6. Use the fullscreen projection view.
+6. Start the projection session.
+7. Use the fullscreen projection interface.
 
-If a session ends, unplug/replug the phone or return to the device list and start again. The app intentionally clears the previous decoder/framebuffer state before a new session.
+If a session ends unexpectedly, reconnect the phone or return to the device list and start a new session.
 
-## Build
+Wireless connection methods are experimental and may require additional device-specific setup.
 
-Prerequisites:
+---
+
+## Building from Source
+
+### Prerequisites
 
 - Android SDK with API 35 platform and build-tools.
 - Android NDK 25.1.8937393.
 - JDK 17.
-- Network access for the first vcpkg/native dependency setup unless the local cache is already populated.
+- Network access for initial vcpkg/native dependency setup unless the local cache is already populated.
 
-Build both release flavors:
+### Standard / Play Build
 
 ```bash
-./gradlew assembleCompatibilityRelease bundlePlayRelease assemblePlayRelease
+./gradlew assemblePlayRelease bundlePlayRelease
 ```
 
-Release outputs before external signing:
+### Release Outputs
 
 ```text
-app/build/outputs/apk/compatibility/release/LibAuto-compatibility-release-unsigned.apk
 app/build/outputs/apk/play/release/LibAuto-play-release-unsigned.apk
+
 app/build/outputs/bundle/playRelease/LibAuto-play-release.aab
 ```
 
-Release APKs are renamed for users:
+The standard APK is distributed as:
 
 ```text
 LibAuto-standard.apk
-LibAuto-legacy-headunit.apk
 ```
 
-For current Google Play submissions, Google’s [target API requirement](https://developer.android.com/google/play/requirements/target-sdk) is Android 15 / API 35 or higher for new apps and updates, with exceptions for Wear OS, Android Automotive OS, and Android TV. LibAuto’s standard/play flavor targets API 35; the legacy head-unit flavor targets API 28 for old/forked head-unit firmware behavior.
+The Legacy Edition build configuration and its release artifact depend on the corresponding Gradle variant configured in the project.
 
-## Repository Layout
+For current Google Play submissions, Google's [target API requirements](https://developer.android.com/google/play/requirements/target-sdk) apply. LibAuto's Standard/Play flavor targets API 35.
 
-- `app/`: Android application, UI, projection service, USB manager, media decode/playback, permissions, sensors, and logging.
-- `native/`: JNI bridge and Android USB transport used by AASDK.
-- `third_party/aasdk-2.1/`: vendored AASDK source used for Android Auto protocol/channel handling.
-- `docs/`: screenshots, release notes, and credits.
-- `scripts/`: helper scripts for release packaging.
+---
+
+## Repository Structure
+
+```text
+LibAuto/
+├── app/                    # Android application and projection implementation
+├── native/                 # JNI bridge and Android USB transport
+├── third_party/
+│   └── aasdk-2.1/           # Vendored AASDK source
+├── docs/                   # Documentation, release notes and credits
+├── scripts/                # Release packaging helpers
+└── README.md
+```
+
+---
 
 ## Important Limitations
 
-- Android Auto is not a public receiver protocol. Compatibility can change with phone-side Android Auto updates.
-- Wireless Android Auto is still in development and is currently hidden from the normal UI.
-- The app depends on Android USB host behavior. Some car head units block or virtualize USB devices in ways third-party apps cannot access.
-- The legacy head-unit APK intentionally targets an older SDK for sideloaded head-unit compatibility; do not upload that flavor to Google Play.
+- Android Auto is not a public receiver protocol. Compatibility may change with phone-side Android Auto updates.
+- LibAuto is not a certified Android Auto receiver.
+- Wireless connectivity is experimental and currently undergoing testing.
+- Bluetooth and Headunit Server connection methods may exhibit device-specific compatibility issues.
+- Some aftermarket head units restrict or virtualize USB devices, preventing third-party applications from accessing them.
+- The Standard and Legacy editions may have different compatibility characteristics depending on the Android environment.
 
-## Documentation
+---
 
-- [Credits](docs/CREDITS.md) lists project dependencies, research references, and attribution notes.
-- [Release Notes](docs/RELEASE.md) documents release flavor outputs and verification commands.
+## Development Philosophy & Support Expectations
+
+This fork is a personal, experimental customization of the original LibAuto project.
+
+Development and customization have been carried out with assistance from **AntiGravity and REA**, alongside my own ideas, direction, and experimentation.
+
+The goal is to explore possibilities, experiment with new approaches, and help bring ideas to life that could be useful to the wider Android Auto developer community.
+
+Some implementations, including the experimental wireless connectivity methods, are driven by personal ideas and are intended to help developers explore possibilities and get their own implementations working.
+
+### A Note on Support
+
+Please understand that this is **not a full-time maintained project or a commercial product**.
+
+- I cannot guarantee continuous maintenance or immediate issue resolution.
+- Extended support, frequent updates, and guaranteed compatibility are not promised.
+- Features may be experimental, incomplete, or device-dependent.
+- Development happens as time and availability permit.
+- Bug fixes and feature requests may not always receive immediate attention.
+- Pull requests, suggestions, testing, and community contributions are welcome.
+
+The intention is to share ideas, experiments, and useful implementations with other developers rather than promise a fully supported standalone product.
+
+**Think of this repository as a contribution to experimentation and development, not a commitment to long-term support.**
+
+---
+
+## Contributing & Upstream Development
+
+Development on this fork is ongoing.
+
+The primary focus of my additional development work has been implementing experimental wireless Android Auto connectivity through:
+
+- Bluetooth-based connectivity.
+- The Headunit Server method.
+
+Both implementations are currently being tested for reliability and device compatibility.
+
+I am looking forward to contributing these improvements back to the original project and collaborating with the upstream maintainer to get the changes reviewed and, hopefully, merged into the official LibAuto codebase.
+
+The broader goal is to explore ideas, implement useful improvements, and make them available to other developers working on similar projects.
+
+Feedback, testing, bug reports, and contributions are welcome.
+
+When reporting issues, please include:
+
+- Android phone model and Android version.
+- Head-unit/tablet model and Android version.
+- Connection method (USB / Bluetooth / Headunit Server).
+- Edition used (Standard / Legacy).
+- Relevant logs and reproduction steps.
+
+---
+
+## Developer & Maintainer of This Fork
+
+**[AggarwalVansh](https://github.com/AggarwalVansh)**
+
+Working on additional development, customizations, multiple Android editions, and experimental wireless Android Auto connectivity implementations.
+
+- GitHub: [@AggarwalVansh](https://github.com/AggarwalVansh)
+- Fork: [AggarwalVansh/LibAuto](https://github.com/AggarwalVansh/LibAuto)
+- Upstream: [stf-ftw/LibAuto](https://github.com/stf-ftw/LibAuto)
+
+---
 
 ## License
 
-LibAuto project code is intended to be released under GPLv3. See [LICENSE](LICENSE).
+LibAuto project code is intended to be released under the **GNU General Public License v3.0 (GPLv3)**.
 
-Third-party code and dependencies retain their own licenses. Review [Credits](docs/CREDITS.md) and dependency license files before public redistribution.
+See [LICENSE](LICENSE) for details.
+
+This repository is based on the original LibAuto project. Original code and third-party dependencies retain their applicable licenses and copyright notices.
+
+Please review [Credits](docs/CREDITS.md) and dependency license files before redistribution.

@@ -989,6 +989,9 @@ std::shared_ptr<AaSession> g_session;
 std::thread g_tcp_accept_thread;
 std::shared_ptr<boost::asio::ip::tcp::acceptor> g_tcp_acceptor;
 std::atomic<bool> g_tcp_accepting{false};
+std::thread g_tcp_connect_thread;
+std::shared_ptr<boost::asio::ip::tcp::socket> g_tcp_connecting_socket;
+std::atomic<bool> g_tcp_connecting{false};
 
 VideoConfigInfo currentVideoConfig() {
     auto width = g_video_width.load();
@@ -2638,24 +2641,113 @@ bool startAaSessionOverTcp(uint16_t port) {
     return true;
 }
 
+bool startAaSessionOverTcpConnect(const std::string& host, uint16_t port) {
+    std::lock_guard<std::mutex> lock(g_session_mutex);
+    if (g_session != nullptr) {
+        native_log::Log(LOG_TAG, "I", "AA TCP connect ignored: session already running");
+        return true;
+    }
+    if (g_tcp_connecting.load()) {
+        native_log::Log(LOG_TAG, "I", "AA TCP connect already in progress");
+        return true;
+    }
+    if (g_tcp_connect_thread.joinable() &&
+        g_tcp_connect_thread.get_id() != std::this_thread::get_id()) {
+        g_tcp_connect_thread.join();
+    }
+
+    g_tcp_connecting.store(true);
+    g_tcp_connect_thread = std::thread([host, port]() {
+        auto session = std::make_shared<AaSession>();
+        session->work_guard = std::make_unique<AaSession::WorkGuard>(session->io.get_executor());
+        session->tcp_wrapper = std::make_shared<tcp::TCPWrapper>();
+        session->tcp_socket = std::make_shared<boost::asio::ip::tcp::socket>(session->io);
+        {
+            std::lock_guard<std::mutex> lock(g_session_mutex);
+            g_tcp_connecting_socket = session->tcp_socket;
+        }
+        try {
+            native_log::Logf(LOG_TAG, "I", "AA TCP connecting to %s:%u", host.c_str(), port);
+            boost::asio::ip::tcp::resolver resolver(session->io);
+            boost::system::error_code ec;
+            auto endpoints = resolver.resolve(host, std::to_string(port), ec);
+            if (ec) {
+                set_error("AA TCP resolve failed: " + ec.message());
+                g_tcp_connecting.store(false);
+                {
+                    std::lock_guard<std::mutex> lock(g_session_mutex);
+                    g_tcp_connecting_socket.reset();
+                }
+                return;
+            }
+            boost::asio::connect(*session->tcp_socket, endpoints, ec);
+            if (ec) {
+                set_error("AA TCP connect to " + host + ":" + std::to_string(port) + " failed: " + ec.message());
+                g_tcp_connecting.store(false);
+                {
+                    std::lock_guard<std::mutex> lock(g_session_mutex);
+                    g_tcp_connecting_socket.reset();
+                }
+                return;
+            }
+            native_log::Logf(LOG_TAG, "I", "AA TCP connected to %s:%u", host.c_str(), port);
+            auto endpointPtr = std::make_shared<tcp::TCPEndpoint>(
+                *session->tcp_wrapper,
+                session->tcp_socket
+            );
+            auto transport = std::make_shared<transport::TCPTransport>(session->io, endpointPtr);
+            {
+                std::lock_guard<std::mutex> lock(g_session_mutex);
+                g_tcp_connecting_socket.reset();
+                if (g_session != nullptr) {
+                    native_log::Log(LOG_TAG, "W", "AA TCP connected but another session is active");
+                    g_tcp_connecting.store(false);
+                    return;
+                }
+                startAaSessionWithTransport(std::move(session), std::move(transport), "tcp-client");
+            }
+            g_tcp_connecting.store(false);
+        } catch (const std::exception& e) {
+            set_error(std::string("AA TCP connect exception: ") + e.what());
+            g_tcp_connecting.store(false);
+            {
+                std::lock_guard<std::mutex> lock(g_session_mutex);
+                g_tcp_connecting_socket.reset();
+            }
+        }
+    });
+    return true;
+}
+
 void stopAaSession() {
     std::shared_ptr<AaSession> session;
     std::shared_ptr<boost::asio::ip::tcp::acceptor> acceptor;
+    std::shared_ptr<boost::asio::ip::tcp::socket> connecting_socket;
     {
         std::lock_guard<std::mutex> lock(g_session_mutex);
         session = g_session;
         g_session.reset();
         acceptor = g_tcp_acceptor;
+        connecting_socket = g_tcp_connecting_socket;
     }
     if (acceptor != nullptr) {
         boost::system::error_code ec;
         acceptor->close(ec);
+    }
+    if (connecting_socket != nullptr) {
+        boost::system::error_code ec;
+        connecting_socket->close(ec);
     }
     if (g_tcp_accept_thread.joinable() &&
         g_tcp_accept_thread.get_id() != std::this_thread::get_id()) {
         g_tcp_accept_thread.join();
     }
     g_tcp_accepting.store(false);
+    if (g_tcp_connect_thread.joinable() &&
+        g_tcp_connect_thread.get_id() != std::this_thread::get_id()) {
+        g_tcp_connect_thread.join();
+    }
+    g_tcp_connecting.store(false);
     if (session == nullptr) {
         return;
     }
@@ -2983,6 +3075,37 @@ Java_com_example_androidautodisplay_AasdkNative_nativeStartAaOverTcp(JNIEnv*, jo
             return JNI_FALSE;
         }
         return startAaSessionOverTcp(static_cast<uint16_t>(port)) ? JNI_TRUE : JNI_FALSE;
+    } catch (const std::exception& e) {
+        set_error(e.what());
+        return JNI_FALSE;
+    }
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_example_androidautodisplay_AasdkNative_nativeStartAaOverTcpConnect(
+    JNIEnv* env, jobject, jstring hostStr, jint port) {
+    if (hostStr == nullptr) {
+        set_error("Host cannot be null");
+        return JNI_FALSE;
+    }
+    const char* hostChars = env->GetStringUTFChars(hostStr, nullptr);
+    std::string host(hostChars ? hostChars : "");
+    if (hostChars != nullptr) {
+        env->ReleaseStringUTFChars(hostStr, hostChars);
+    }
+    native_log::Logf(LOG_TAG, "I", "nativeStartAaOverTcpConnect entered host=%s port=%d",
+                     host.c_str(), static_cast<int>(port));
+    g_last_error.clear();
+    try {
+        if (host.empty()) {
+            set_error("Invalid TCP host for Android Auto");
+            return JNI_FALSE;
+        }
+        if (port <= 0 || port > 65535) {
+            set_error("Invalid TCP port for Android Auto");
+            return JNI_FALSE;
+        }
+        return startAaSessionOverTcpConnect(host, static_cast<uint16_t>(port)) ? JNI_TRUE : JNI_FALSE;
     } catch (const std::exception& e) {
         set_error(e.what());
         return JNI_FALSE;

@@ -1,32 +1,65 @@
 # Gradle and Android build outputs
 .gradle/
 build/
+**/build/
 app/build/
+.cxx/
 app/.cxx/
+**/.cxx/
+**/CMakeFiles/
+**/CMakeCache.txt
+**/.ninja_*
 
-# Local Android/IDE state
+# Local Android & IDE state
 local.properties
 .idea/
 *.iml
+**/*.iml
+.navigation/
+captures/
+*.hprof
+.vscode/
 
-# Native dependency caches and vendored checkout
+# Native dependency caches and vendored checkouts
 native/vcpkg_installed/
+**/vcpkg_installed/
 third_party/vcpkg/
 third_party/vcpkg-bincache/
+third_party/vcpkg-downloads/
 
 # Downloaded tool distributions
 gradle-8.2.1/
-gradle-8.2.1-bin.zip
+gradle-*-bin.zip
+gradle-*-all.zip
 
 # Logs, generated archives, and packaged artifacts
 *.log
+*.logcat
+logs/
 *.apk
 *.aab
+*.ap_
+*.dex
 *.keystore
 *.jks
 *.idsig
 keystore.properties
 /release/
+release/
+outputs/
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Python / Scripts cache
+__pycache__/
+*.pyc
 
 # Local SSH host-key file used by Codex for this repo setup
 .codex_known_hosts
+
+# Local temporary delete folder
+delete/
+
