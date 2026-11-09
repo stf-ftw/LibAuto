@@ -1,15 +1,26 @@
 # vcpkg toolchain wrapper for Android builds.
 
-if(DEFINED CMAKE_ANDROID_NDK)
-    set(ANDROID_NDK "${CMAKE_ANDROID_NDK}" CACHE PATH "" FORCE)
+set(_raw_ndk "")
+if(DEFINED ANDROID_NDK AND NOT "${ANDROID_NDK}" STREQUAL "")
+    set(_raw_ndk "${ANDROID_NDK}")
+elseif(DEFINED CMAKE_ANDROID_NDK AND NOT "${CMAKE_ANDROID_NDK}" STREQUAL "")
+    set(_raw_ndk "${CMAKE_ANDROID_NDK}")
+elseif(DEFINED ENV{ANDROID_NDK} AND NOT "$ENV{ANDROID_NDK}" STREQUAL "")
+    set(_raw_ndk "$ENV{ANDROID_NDK}")
+elseif(DEFINED ENV{ANDROID_NDK_HOME} AND NOT "$ENV{ANDROID_NDK_HOME}" STREQUAL "")
+    set(_raw_ndk "$ENV{ANDROID_NDK_HOME}")
+else()
+    set(_raw_ndk "C:/Users/user/AppData/Local/Android/Sdk/ndk/25.1.8937393")
 endif()
 
-if(DEFINED ANDROID_NDK)
-    set(ANDROID_NDK_HOME "${ANDROID_NDK}" CACHE PATH "" FORCE)
-    set(ENV{ANDROID_NDK} "${ANDROID_NDK}")
-    set(ENV{ANDROID_NDK_HOME} "${ANDROID_NDK}")
-    set(VCPKG_CHAINLOAD_TOOLCHAIN_FILE "${ANDROID_NDK}/build/cmake/android.toolchain.cmake")
-endif()
+file(TO_CMAKE_PATH "${_raw_ndk}" _android_ndk)
+set(ANDROID_NDK "${_android_ndk}" CACHE PATH "Android NDK path" FORCE)
+set(CMAKE_ANDROID_NDK "${_android_ndk}" CACHE PATH "Android NDK path" FORCE)
+set(ANDROID_NDK_HOME "${_android_ndk}" CACHE PATH "Android NDK home" FORCE)
+set(ENV{ANDROID_NDK} "${_android_ndk}")
+set(ENV{ANDROID_NDK_HOME} "${_android_ndk}")
+
+set(VCPKG_CHAINLOAD_TOOLCHAIN_FILE "${_android_ndk}/build/cmake/android.toolchain.cmake" CACHE FILEPATH "Chainload Android toolchain" FORCE)
 
 if(NOT DEFINED ANDROID_ABI)
     set(ANDROID_ABI "arm64-v8a" CACHE STRING "" FORCE)
@@ -27,6 +38,7 @@ endif()
 
 if(NOT DEFINED VCPKG_OVERLAY_TRIPLETS)
     get_filename_component(_vcpkg_overlay_triplets "${CMAKE_CURRENT_LIST_DIR}/vcpkg-triplets" ABSOLUTE)
+    file(TO_CMAKE_PATH "${_vcpkg_overlay_triplets}" _vcpkg_overlay_triplets)
     set(VCPKG_OVERLAY_TRIPLETS "${_vcpkg_overlay_triplets}")
 endif()
 
@@ -36,6 +48,7 @@ endif()
 
 if(NOT DEFINED VCPKG_ROOT)
     get_filename_component(_vcpkg_root "${CMAKE_CURRENT_LIST_DIR}/../third_party/vcpkg" ABSOLUTE)
+    file(TO_CMAKE_PATH "${_vcpkg_root}" _vcpkg_root)
     set(VCPKG_ROOT "${_vcpkg_root}")
 endif()
 

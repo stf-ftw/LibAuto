@@ -1,7 +1,7 @@
 {
   "name": "aasdk-android",
   "version-string": "0.1",
-  "builtin-baseline": "64e1fbee7d9f40eab5d112aaff648c4dcffe9e47",
+  "builtin-baseline": "ce1916404fc6f2b645f419a6d47b7ebafe686582",
   "dependencies": [
     "abseil",
     "protobuf",

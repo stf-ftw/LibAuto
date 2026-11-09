@@ -14,8 +14,12 @@ import android.os.IBinder
 import android.os.Looper
 import androidx.core.app.NotificationCompat
 import android.net.Uri
+import android.os.SystemClock
 import androidx.core.content.FileProvider
 import java.io.File
+import java.io.IOException
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -26,6 +30,7 @@ class ProjectionService : Service() {
     private lateinit var transportController: TransportTestController
     private lateinit var usbController: UsbIoController
     private lateinit var wirelessController: WirelessAaController
+    private var headunitServerBridge: HeadunitServerBridge? = null
     private val logBuffer = ArrayDeque<String>()
     private val usbLogBuffer = ArrayDeque<String>()
     private var projectionRunning = false
@@ -190,6 +195,48 @@ class ProjectionService : Service() {
                 projectionRunning = false
                 maybeStopService()
             }
+            Constants.ACTION_HEADUNIT_SERVER_START -> {
+                projectionRunning = true
+                ensureForeground("Headunit Server Android Auto")
+                val host = intent.getStringExtra(Constants.EXTRA_HEADUNIT_SERVER_HOST)
+                    ?: intent.getStringExtra(Constants.EXTRA_HOST)
+                    ?: NetworkInfoProvider.getGatewayAddress(this)
+                val port = intent.getIntExtra(
+                    Constants.EXTRA_HEADUNIT_SERVER_PORT,
+                    intent.getIntExtra(Constants.EXTRA_PORT, Constants.DEFAULT_TRANSPORT_PORT)
+                )
+                appendUsbLog("Headunit Server connect requested: $host:$port")
+                CarSensorBridge.start()
+                applyProjectionResolutionSetting()
+                broadcastWirelessStatus("connecting", "Connecting to Headunit Server at $host:$port...")
+                headunitServerBridge?.stop()
+                headunitServerBridge = HeadunitServerBridge(
+                    host = host,
+                    port = port,
+                    onConnected = {
+                        appendUsbLog("Headunit Server connected to $host:$port")
+                        broadcastWirelessStatus("headunit_server_connected", "Connected to Headunit Server at $host:$port")
+                    },
+                    onError = { error ->
+                        appendUsbLog("Headunit Server error: $error")
+                        broadcastWirelessStatus("failed", "Connection failed: $error")
+                        stopAaSessionAsync("headunit-server-error")
+                        CarSensorBridge.stop()
+                        projectionRunning = false
+                        maybeStopService()
+                    }
+                ).also { it.start() }
+            }
+            Constants.ACTION_HEADUNIT_SERVER_STOP -> {
+                appendUsbLog("Headunit Server stop requested")
+                headunitServerBridge?.stop()
+                headunitServerBridge = null
+                stopAaSessionAsync("headunit-server-stop")
+                CarSensorBridge.stop()
+                projectionRunning = false
+                broadcastWirelessStatus("stopped", "Headunit Server disconnected")
+                maybeStopService()
+            }
             Constants.ACTION_TRANSPORT_START -> {
                 transportPort = intent.getIntExtra(Constants.EXTRA_PORT, Constants.DEFAULT_TRANSPORT_PORT)
                 transportRunning = true
@@ -342,6 +389,14 @@ class ProjectionService : Service() {
 
     private fun ensureForeground(text: String) {
         startForeground(Constants.NOTIFICATION_ID, buildNotification(text))
+    }
+
+    private fun broadcastWirelessStatus(status: String, details: String) {
+        val intent = Intent(Constants.ACTION_WIRELESS_STATUS).apply {
+            putExtra(Constants.EXTRA_STATUS, status)
+            putExtra(Constants.EXTRA_WIRELESS_DETAILS, details)
+        }
+        sendBroadcast(intent)
     }
 
     private fun broadcastTransportStatus(
@@ -645,9 +700,170 @@ class ProjectionService : Service() {
         if (::wirelessController.isInitialized) {
             wirelessController.stop()
         }
+        headunitServerBridge?.stop()
+        headunitServerBridge = null
         CarSensorBridge.stop()
         stopAaSessionAsync("service-destroy")
         usbController.stopMonitoring()
         super.onDestroy()
+    }
+
+    private class HeadunitServerBridge(
+        private val host: String,
+        private val port: Int,
+        private val onConnected: () -> Unit,
+        private val onError: (String) -> Unit
+    ) {
+        @Volatile private var running = false
+        private var phoneSocket: Socket? = null
+        private var localSocket: Socket? = null
+
+        private fun findAvailablePort(): Int {
+            return try {
+                java.net.ServerSocket(0).use { it.localPort }
+            } catch (_: Exception) {
+                5278
+            }
+        }
+
+        fun start() {
+            running = true
+            Thread({
+                try {
+                    // 1. Ensure any lingering native AASDK session is completely stopped first
+                    AasdkNative.nativeStopAaSession()
+                    Thread.sleep(250)
+
+                    if (!running) return@Thread
+
+                    // 2. Select a guaranteed free ephemeral local port
+                    val localPort = findAvailablePort()
+
+                    // 3. Start native AASDK TCP listener on that port
+                    val started = AasdkNative.nativeStartAaOverTcp(localPort)
+                    if (!started) {
+                        val err = AasdkNative.nativeGetLastError().ifEmpty { "Failed to bind native TCP port $localPort" }
+                        onError(err)
+                        return@Thread
+                    }
+
+                    // 4. Connect outbound to the phone's head unit server (try up to 5 times)
+                    var pSocket: Socket? = null
+                    var phoneEx: Exception? = null
+                    for (attempt in 1..5) {
+                        if (!running) return@Thread
+                        try {
+                            val s = Socket()
+                            s.tcpNoDelay = true
+                            s.sendBufferSize = 65536
+                            s.receiveBufferSize = 65536
+                            s.connect(InetSocketAddress(host, port), 2500)
+                            pSocket = s
+                            break
+                        } catch (e: Exception) {
+                            phoneEx = e
+                            Thread.sleep(400)
+                        }
+                    }
+                    if (pSocket == null) {
+                        onError("Cannot connect to phone at $host:$port: ${phoneEx?.message ?: "timeout"}")
+                        return@Thread
+                    }
+                    phoneSocket = pSocket
+
+                    // 5. Connect to local AASDK listener (retry loop)
+                    var lSocket: Socket? = null
+                    var localEx: Exception? = null
+                    val waitStart = SystemClock.uptimeMillis()
+                    while (running && SystemClock.uptimeMillis() - waitStart < 4000) {
+                        try {
+                            val s = Socket()
+                            s.tcpNoDelay = true
+                            s.sendBufferSize = 65536
+                            s.receiveBufferSize = 65536
+                            s.connect(InetSocketAddress(java.net.InetAddress.getByName("127.0.0.1"), localPort), 1000)
+                            lSocket = s
+                            break
+                        } catch (e: Exception) {
+                            localEx = e
+                            Thread.sleep(150)
+                        }
+                    }
+                    if (lSocket == null) {
+                        try { pSocket.close() } catch (_: Exception) {}
+                        onError("Local AASDK listener failed on port $localPort: ${localEx?.message ?: "timeout"}")
+                        return@Thread
+                    }
+                    localSocket = lSocket
+
+                    // 6. Connected successfully!
+                    onConnected()
+
+                    // 7. Stream bidirectional data
+                    val pIn = pSocket.getInputStream()
+                    val pOut = pSocket.getOutputStream()
+                    val lIn = lSocket.getInputStream()
+                    val lOut = lSocket.getOutputStream()
+
+                    var totalFromPhone = 0L
+                    var totalToPhone = 0L
+
+                    val t1 = Thread({
+                        val buf = ByteArray(32768)
+                        try {
+                            var r = 0
+                            while (running && pIn.read(buf).also { r = it } != -1) {
+                                lOut.write(buf, 0, r)
+                                lOut.flush()
+                                totalFromPhone += r
+                            }
+                        } catch (_: Exception) {}
+                        stop()
+                    }, "bridge-phone-to-local")
+
+                    val t2 = Thread({
+                        val buf = ByteArray(32768)
+                        try {
+                            var r = 0
+                            while (running && lIn.read(buf).also { r = it } != -1) {
+                                pOut.write(buf, 0, r)
+                                pOut.flush()
+                                totalToPhone += r
+                            }
+                        } catch (_: Exception) {}
+                        stop()
+                    }, "bridge-local-to-phone")
+
+                    t1.isDaemon = true
+                    t2.isDaemon = true
+                    t1.start()
+                    t2.start()
+                    t1.join()
+                    t2.join()
+                    if (totalFromPhone == 0L && totalToPhone == 0L) {
+                        onError("Connection closed by phone before handshake")
+                    }
+                } catch (ex: Exception) {
+                    if (running) {
+                        onError(ex.message ?: "Connection error")
+                    }
+                } finally {
+                    stop()
+                }
+            }, "libauto-headunit-server-bridge").apply {
+                isDaemon = true
+                start()
+            }
+        }
+
+        fun stop() {
+            if (!running) return
+            running = false
+            try { phoneSocket?.close() } catch (_: Exception) {}
+            try { localSocket?.close() } catch (_: Exception) {}
+            phoneSocket = null
+            localSocket = null
+            AasdkNative.nativeStopAaSession()
+        }
     }
 }

@@ -58,6 +58,9 @@ object AaProjectionSink : SurfaceHolder.Callback {
         AudioRenderer(AUDIO_STREAM_SYSTEM, "system")
     )
 
+    @Volatile
+    var onFirstFrameRendered: (() -> Unit)? = null
+
     private var configuredVideoWidth = 0
     private var configuredVideoHeight = 0
 
@@ -275,6 +278,9 @@ object AaProjectionSink : SurfaceHolder.Callback {
                         in 0..Int.MAX_VALUE -> {
                             codec.releaseOutputBuffer(outputIndex, true)
                             videoRenderedFrames += 1
+                            if (videoRenderedFrames == 1L) {
+                                onFirstFrameRendered?.invoke()
+                            }
                         }
                     }
                 } catch (_: InterruptedException) {
@@ -481,6 +487,9 @@ object AaProjectionSink : SurfaceHolder.Callback {
                 in 0..Int.MAX_VALUE -> {
                     codec.releaseOutputBuffer(outputIndex, true)
                     videoRenderedFrames += 1
+                    if (videoRenderedFrames == 1L) {
+                        onFirstFrameRendered?.invoke()
+                    }
                 }
             }
         }

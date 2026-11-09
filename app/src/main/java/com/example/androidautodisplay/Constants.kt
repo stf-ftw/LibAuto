@@ -27,6 +27,8 @@ object Constants {
     const val ACTION_WIRELESS_START = "ro.stf_ftw.libauto.WIRELESS_START"
     const val ACTION_WIRELESS_STOP = "ro.stf_ftw.libauto.WIRELESS_STOP"
     const val ACTION_WIRELESS_STATUS = "ro.stf_ftw.libauto.WIRELESS_STATUS"
+    const val ACTION_HEADUNIT_SERVER_START = "ro.stf_ftw.libauto.HEADUNIT_SERVER_START"
+    const val ACTION_HEADUNIT_SERVER_STOP = "ro.stf_ftw.libauto.HEADUNIT_SERVER_STOP"
 
     const val EXTRA_STATUS = "status"
     const val EXTRA_HOST = "host"
@@ -96,7 +98,14 @@ object Constants {
     const val NOTIFICATION_CHANNEL_ID = "projection_channel"
     const val NOTIFICATION_ID = 1001
     const val DEFAULT_TRANSPORT_PORT = 5277
-    const val DEFAULT_WIRELESS_AA_PORT = 5000
+    const val DEFAULT_WIRELESS_AA_PORT = 5277
+    const val EXTRA_HEADUNIT_SERVER_HOST = "headunit_server_host"
+    const val EXTRA_HEADUNIT_SERVER_PORT = "headunit_server_port"
+    const val HEADUNIT_SERVER_PREFS = "headunit_server_prefs"
+    const val PREF_HEADUNIT_SERVER_HOST = "pref_headunit_server_host"
+    const val PREF_HEADUNIT_SERVER_PORT = "pref_headunit_server_port"
+    const val PREF_HEADUNIT_SERVER_AUTO_DETECT = "pref_headunit_server_auto_detect"
+    const val PREF_HEADUNIT_SERVER_AUTO_CONNECT = "pref_headunit_server_auto_connect"
 
     fun normalizeAoapValue(key: String, value: String?): String {
         return when (key) {

@@ -250,7 +250,7 @@
                     android:background="@drawable/card_bg"
                     android:orientation="vertical"
                     android:padding="16dp"
-                    android:visibility="gone">
+                    android:visibility="visible">
 
                     <TextView
                         android:layout_width="wrap_content"
@@ -271,43 +271,216 @@
                         android:textColor="@color/libauto_text"
                         android:textSize="14sp" />
 
-                    <TextView
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="4dp"
-                        android:text="@string/wireless_hint"
-                        android:textColor="@color/libauto_dim"
-                        android:textSize="12sp" />
-
+                    <!-- Method 1: Bluetooth + Hotspot -->
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="12dp"
-                        android:gravity="center"
-                        android:orientation="horizontal">
+                        android:background="@drawable/device_row_bg"
+                        android:orientation="vertical"
+                        android:padding="12dp">
 
-                        <Button
-                            android:id="@+id/wireless_start_button"
+                        <TextView
                             android:layout_width="wrap_content"
-                            android:layout_height="40dp"
-                            android:background="@drawable/pill_button"
-                            android:minWidth="150dp"
-                            android:text="@string/wireless_start"
-                            android:textAllCaps="false"
-                            android:textColor="@color/white"
-                            android:textStyle="bold" />
-
-                        <Button
-                            android:id="@+id/wireless_stop_button"
-                            android:layout_width="wrap_content"
-                            android:layout_height="40dp"
-                            android:layout_marginStart="12dp"
-                            android:background="@drawable/pill_button_secondary"
-                            android:minWidth="150dp"
-                            android:text="@string/wireless_stop"
-                            android:textAllCaps="false"
+                            android:layout_height="wrap_content"
+                            android:text="@string/wireless_method1_title"
                             android:textColor="@color/libauto_text"
+                            android:textSize="13sp"
                             android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:text="@string/wireless_method1_hint"
+                            android:textColor="@color/libauto_dim"
+                            android:textSize="11sp" />
+
+                        <TextView
+                            android:id="@+id/wireless_bt_device_info"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:text="@string/wireless_method1_bt_no_paired"
+                            android:textColor="@color/libauto_muted"
+                            android:textSize="11sp" />
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:gravity="center"
+                            android:orientation="horizontal">
+
+                            <Button
+                                android:id="@+id/wireless_start_button"
+                                android:layout_width="0dp"
+                                android:layout_height="40dp"
+                                android:layout_weight="1"
+                                android:background="@drawable/pill_button"
+                                android:text="@string/wireless_method1_start"
+                                android:textAllCaps="false"
+                                android:textColor="@color/white"
+                                android:textSize="13sp"
+                                android:textStyle="bold" />
+
+                            <Button
+                                android:id="@+id/wireless_open_bt_settings_button"
+                                android:layout_width="wrap_content"
+                                android:layout_height="40dp"
+                                android:layout_marginStart="8dp"
+                                android:background="@drawable/pill_button_secondary"
+                                android:paddingHorizontal="10dp"
+                                android:text="@string/wireless_method1_bt_settings"
+                                android:textAllCaps="false"
+                                android:textColor="@color/libauto_text"
+                                android:textSize="11sp" />
+
+                            <Button
+                                android:id="@+id/wireless_stop_button"
+                                android:layout_width="wrap_content"
+                                android:layout_height="40dp"
+                                android:layout_marginStart="8dp"
+                                android:background="@drawable/pill_button_secondary"
+                                android:minWidth="80dp"
+                                android:text="@string/wireless_method1_stop"
+                                android:textAllCaps="false"
+                                android:textColor="@color/libauto_text"
+                                android:textSize="13sp"
+                                android:textStyle="bold" />
+                        </LinearLayout>
+                    </LinearLayout>
+
+                    <!-- Method 2: Headunit Server -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:background="@drawable/device_row_bg"
+                        android:orientation="vertical"
+                        android:padding="12dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/wireless_method2_title"
+                            android:textColor="@color/libauto_text"
+                            android:textSize="13sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:text="@string/wireless_method2_hint"
+                            android:textColor="@color/libauto_dim"
+                            android:textSize="11sp" />
+
+                        <CheckBox
+                            android:id="@+id/headunit_server_auto_detect_checkbox"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="6dp"
+                            android:checked="true"
+                            android:text="@string/wireless_method2_auto_detect"
+                            android:textColor="@color/libauto_text"
+                            android:textSize="12sp" />
+
+                        <TextView
+                            android:id="@+id/headunit_server_scan_status"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="4dp"
+                            android:text="Tap Connect: automatically scans hotspot / Wi-Fi for phone"
+                            android:textColor="@color/libauto_muted"
+                            android:textSize="11sp" />
+
+                        <LinearLayout
+                            android:id="@+id/headunit_server_manual_ip_layout"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="@string/wireless_method2_ip_label"
+                                android:textColor="@color/libauto_muted"
+                                android:textSize="12sp" />
+
+                            <EditText
+                                android:id="@+id/headunit_server_ip_input"
+                                android:layout_width="0dp"
+                                android:layout_height="38dp"
+                                android:layout_marginStart="8dp"
+                                android:layout_weight="2"
+                                android:background="@drawable/card_bg"
+                                android:hint="Auto (gateway/scan)"
+                                android:inputType="textUri"
+                                android:paddingHorizontal="10dp"
+                                android:singleLine="true"
+                                android:textColor="@color/libauto_text"
+                                android:textColorHint="@color/libauto_dim"
+                                android:textSize="12sp" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="12dp"
+                                android:text="@string/wireless_method2_port_label"
+                                android:textColor="@color/libauto_muted"
+                                android:textSize="12sp" />
+
+                            <EditText
+                                android:id="@+id/headunit_server_port_input"
+                                android:layout_width="0dp"
+                                android:layout_height="38dp"
+                                android:layout_marginStart="8dp"
+                                android:layout_weight="1"
+                                android:background="@drawable/card_bg"
+                                android:hint="5277"
+                                android:inputType="number"
+                                android:paddingHorizontal="10dp"
+                                android:singleLine="true"
+                                android:textColor="@color/libauto_text"
+                                android:textColorHint="@color/libauto_dim"
+                                android:textSize="12sp" />
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:gravity="center"
+                            android:orientation="horizontal">
+
+                            <Button
+                                android:id="@+id/headunit_server_connect_button"
+                                android:layout_width="0dp"
+                                android:layout_height="40dp"
+                                android:layout_weight="1"
+                                android:background="@drawable/pill_button"
+                                android:text="@string/wireless_method2_connect"
+                                android:textAllCaps="false"
+                                android:textColor="@color/white"
+                                android:textSize="13sp"
+                                android:textStyle="bold" />
+
+                            <Button
+                                android:id="@+id/headunit_server_stop_button"
+                                android:layout_width="wrap_content"
+                                android:layout_height="40dp"
+                                android:layout_marginStart="10dp"
+                                android:background="@drawable/pill_button_secondary"
+                                android:minWidth="100dp"
+                                android:text="@string/wireless_method2_disconnect"
+                                android:textAllCaps="false"
+                                android:textColor="@color/libauto_text"
+                                android:textSize="13sp"
+                                android:textStyle="bold" />
+                        </LinearLayout>
                     </LinearLayout>
                 </LinearLayout>
             </LinearLayout>
